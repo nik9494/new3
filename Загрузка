@@ -1,0 +1,54 @@
+ngrok http 3000
+# Обновить VITE_API_URL в .env
+ssh -R 80:localhost:3000 nokey@localhost.run
+
+/Applications/Telegram.app/Contents/MacOS/Telegram --remote-debugging-port=9222
+node --inspect index.js
+
+npm run dev
+
+docker-compose up --build
+
+npm run build
+# Затем разместить содержимое dist на вашем хостинге
+
+установка пакетов для тунеля cloudflare
+brew install cloudflare/cloudflare/cloudflared
+
+открыть тунель cloudflare
+cloudflared tunnel
+
+открыть тунель cloudflare
+cloudflared tunnel --url http://localhost:5173
+
+
+
+Временное изменение размера буфера (до перезагрузки)
+Выполните следующую команду в терминале: 'sudo sysctl -w kern.ipc.maxsockbuf=8441037'
+
+Проверка изменений
+Чтобы убедиться, что изменения применились, выполните команду: sysctl kern.ipc.maxsockbuf
+
+
+проверка на ошибки
+npm run lint
+
+исправление ошибок
+npm run lint:fix
+
+
+просмотр оптимизациии 
+
+npx vite-bundle-visualizer
+
+npx vite-bundle-analyzer ./dist/stats.html
+
+npx vite build && npx vite preview
+
+npm run build
+
+
+этот файл нужно исправить
+так чтоб при нажатии на сердечко можно было добавить и отобразить количество избранных товаров вот здесь в другом файле где иконка избранного и так же убрать с этого файла при повторном нажатии но чтоб логика не влияла на логику рейтинга там должно все оставаться как было 
+
+сейчас я тебе отправлю второй файл ничего пока не пиши 

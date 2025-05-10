@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "noEmitOnError": false,
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "strict": false,
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": [
+    "src",      // ваши React‑файлы  
+    "server"    // теперь также будет читаться папка server/telegramSDK.ts :contentReference[oaicite:0]{index=0}:contentReference[oaicite:1]{index=1}
+, "vite-env.d.ts"  ],
+  "exclude": [],
+  "references": [
+    { "path": "./tsconfig.node.json" }
+  ]
+}

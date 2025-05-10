@@ -1,0 +1,9 @@
+import Leaderboard from "@/pages/Leaderboard";
+
+export default function LeaderboardStoryboard() {
+  return (
+    <div className="bg-white">
+      <Leaderboard />
+    </div>
+  );
+}
