@@ -49,197 +49,212 @@ export function useTelegram() {
 
   // Инициализируем пользователя с бэкендом, когда Telegram WebApp готов
   useEffect(() => {
-    const initializeUser = async () => {
-      // Режим Telegram WebApp
-      if (window.Telegram?.WebApp) {
-        if (webAppReady && webAppUser && !isInitializing) {
-          setIsInitializing(true);
-          setError(null);
+    console.log('useTelegram useEffect запущен, состояние:', {
+      webAppReady,
+      webAppUser: webAppUser
+        ? `${webAppUser.username} (${webAppUser.id})`
+        : 'нет',
+      isInitializing,
+      isReady,
+      appUser: appUser ? `${appUser.username} (${appUser.id})` : 'нет',
+    });
 
+    // Предотвращаем повторную инициализацию
+    if (isInitializing) {
+      console.log('Инициализация уже выполняется, пропускаем');
+      return;
+    }
+
+    // Если пользователь уже готов, не делаем ничего
+    if (isReady && appUser) {
+      console.log('Пользователь уже инициализирован:', appUser.username);
+      return;
+    }
+
+    // Функция инициализации пользователя
+    const initializeUser = async () => {
+      console.log('Запуск initializeUser');
+      setIsInitializing(true);
+      setError(null);
+
+      try {
+        // Режим Telegram WebApp
+        if (window.Telegram?.WebApp && webAppReady && webAppUser) {
+          console.log('Режим Telegram WebApp, пользователь:', {
+            id: webAppUser.id,
+            username: webAppUser.username,
+          });
+
+          // Устанавливаем пользователя Telegram
+          setUser(webAppUser);
+
+          // Очищаем кэш запросов перед запросом пользователя
+          localStorage.removeItem('api_cache');
+
+          // Проверяем, существует ли пользователь в базе данных
           try {
-            console.log('Инициализация пользователя с данными Telegram:', {
-              id: webAppUser.id,
-              username: webAppUser.username,
+            console.log('Запрос пользователя по Telegram ID:', webAppUser.id);
+
+            // Используем fetchApiWithoutDebounce для гарантированного запроса без кэширования
+            const existingUserResponse =
+              await userApi.getUserByTelegramIdWithoutCache(webAppUser.id);
+            console.log(
+              'Ответ API для пользователя Telegram:',
+              existingUserResponse
+            );
+
+            if (
+              existingUserResponse?.success &&
+              existingUserResponse?.data?.user
+            ) {
+              const userData = existingUserResponse.data.user;
+              console.log('Пользователь найден в базе данных:', userData);
+
+              // Сохраняем данные пользователя
+              setAppUser(userData);
+
+              // Сохраняем ID пользователя в localStorage
+              localStorage.setItem('userId', userData.id);
+
+              // Сохраняем токен, если он есть
+              if (existingUserResponse.token) {
+                localStorage.setItem('authToken', existingUserResponse.token);
+              }
+
+              setIsReady(true);
+              setIsInitializing(false);
+              return;
+            } else {
+              console.log('Пользователь не найден или неверный формат ответа');
+            }
+          } catch (existingUserError) {
+            console.error(
+              'Ошибка при запросе пользователя:',
+              existingUserError
+            );
+            // Продолжаем с созданием нового пользователя
+          }
+
+          // Если пользователь не найден, инициализируем нового
+          try {
+            console.log('Инициализация нового пользователя через API');
+
+            const initResponse = await userApi.initUserWithoutCache({
+              telegram_id: webAppUser.id,
+              username: webAppUser.username || `User_${webAppUser.id}`,
               first_name: webAppUser.first_name,
               last_name: webAppUser.last_name,
+              photo_url: webAppUser.photo_url,
             });
 
-            // Сначала устанавливаем пользователя Telegram
-            setUser(webAppUser);
+            console.log('Ответ инициализации:', initResponse);
 
-            // Проверяем, существует ли пользователь в базе данных
-            try {
-              console.log(
-                'Проверка существования пользователя по Telegram ID:',
-                webAppUser.id
-              );
+            if (initResponse?.success && initResponse?.data?.user) {
+              const userData = initResponse.data.user;
+              console.log('Пользователь успешно инициализирован:', userData);
 
-              // Добавляем обработку ошибок и повторные попытки
-              let existingUser = null;
-              let retryCount = 0;
-              const maxRetries = 3;
+              setAppUser(userData);
 
-              while (retryCount < maxRetries) {
-                try {
-                  existingUser = (await userApi.getUserByTelegramId(
-                    webAppUser.id
-                  )) as ApiResponse<UserApiResponse>;
-                  break; // Если запрос успешен, выходим из цикла
-                } catch (retryError) {
-                  retryCount++;
-                  console.log(
-                    `Попытка ${retryCount}/${maxRetries} не удалась:`,
-                    retryError
-                  );
-                  if (retryCount >= maxRetries) throw retryError;
-                  // Ждем перед следующей попыткой (экспоненциальная задержка)
-                  await new Promise(resolve =>
-                    setTimeout(resolve, 1000 * Math.pow(2, retryCount))
-                  );
-                }
+              // Сохраняем JWT токен и ID пользователя
+              if (initResponse.token) {
+                localStorage.setItem('authToken', initResponse.token);
               }
 
-              if (existingUser && existingUser.success && existingUser.data) {
-                console.log(
-                  'Пользователь найден в базе данных:',
-                  existingUser.data
-                );
+              localStorage.setItem('userId', userData.id);
 
-                // Если пользователь найден, сохраняем его данные
-                if (existingUser.data.user) {
-                  setAppUser(existingUser.data.user);
-
-                  // Сохраняем ID пользователя в localStorage
-                  if (existingUser.data.user.id) {
-                    localStorage.setItem('userId', existingUser.data.user.id);
-                    console.log(
-                      'ID пользователя сохранен в localStorage:',
-                      existingUser.data.user.id
-                    );
-                  }
-
-                  // Сохраняем токен, если он есть
-                  if (existingUser.token) {
-                    localStorage.setItem('authToken', existingUser.token);
-                    console.log('JWT токен сохранен в localStorage');
-                  }
-
-                  setIsReady(true);
-                  setIsInitializing(false);
-                  return;
-                }
-              }
-            } catch (existingUserError) {
-              console.log(
-                'Пользователь не найден в базе данных или произошла ошибка:',
-                existingUserError
-              );
-              // Продолжаем с созданием нового пользователя
-            }
-
-            // Если пользователь не найден, инициализируем нового
-            try {
-              console.log('Инициализация нового пользователя через API:', {
-                baseUrl: import.meta.env.VITE_API_URL || 'default',
-                hostname: window.location.hostname,
-                origin: window.location.origin,
-              });
-              const response = (await userApi.initUser({
-                telegram_id: webAppUser.id,
-                username: webAppUser.username,
-                first_name: webAppUser.first_name,
-                last_name: webAppUser.last_name,
-                photo_url: webAppUser.photo_url,
-              })) as ApiResponse<UserApiResponse>;
-
-              console.log('Ответ инициализации бэкенда:', response);
-
-              if (response && response.success && response.data?.user) {
-                setAppUser(response.data.user);
-
-                // Сохраняем JWT токен и ID пользователя, если они предоставлены
-                if (response.token) {
-                  localStorage.setItem('authToken', response.token);
-                  console.log('JWT токен сохранен в localStorage');
-                }
-                if (response.data.user.id) {
-                  localStorage.setItem('userId', response.data.user.id);
-                  console.log(
-                    'ID пользователя сохранен в localStorage:',
-                    response.data.user.id
-                  );
-                }
-
-                setIsReady(true);
-                console.log(
-                  'Пользователь инициализирован с бэкендом:',
-                  response.data.user
-                );
-              } else {
-                setError(
-                  'Не удалось инициализировать пользователя: неверный формат ответа'
-                );
-                console.error(
-                  'Ошибка инициализации пользователя: неверный формат ответа',
-                  response
-                );
-              }
-            } catch (apiError) {
-              setError(
-                apiError instanceof Error
-                  ? apiError.message
-                  : 'Ошибка запроса API'
-              );
+              setIsReady(true);
+            } else {
               console.error(
-                'Ошибка API при инициализации пользователя:',
-                apiError
+                'Неверный формат ответа инициализации:',
+                initResponse
+              );
+              setError(
+                'Не удалось инициализировать пользователя: неверный формат ответа'
               );
             }
-          } catch (err) {
-            setError(err instanceof Error ? err.message : 'Неизвестная ошибка');
-            console.error('Исключение при инициализации пользователя:', err);
-          } finally {
-            setIsInitializing(false);
+          } catch (apiError) {
+            console.error('Ошибка API при инициализации:', apiError);
+            setError(
+              apiError instanceof Error
+                ? apiError.message
+                : 'Ошибка запроса API'
+            );
           }
         }
-      }
-      // Режим прямой ссылки (без Telegram)
-      else {
-        console.log('Режим прямой ссылки: проверка localStorage');
-        
-        const userId = localStorage.getItem('userId');
-        const authToken = localStorage.getItem('authToken');
-        
-        // Если есть сохраненный пользователь - загружаем
-        if (userId && authToken) {
-          try {
-            const response = await userApi.getUserProfile(userId);
-            setAppUser(response.data);
-          } catch (err) {
-            localStorage.removeItem('userId');
-            localStorage.removeItem('authToken');
+        // Проверяем сохраненные данные пользователя
+        else if (!window.Telegram?.WebApp) {
+          const userId = localStorage.getItem('userId');
+          const authToken = localStorage.getItem('authToken');
+
+          if (userId && authToken) {
+            console.log(
+              'Режим браузера: загрузка сохраненного пользователя:',
+              userId
+            );
+
+            try {
+              const response = await userApi.getUserProfileWithoutCache(userId);
+              console.log('Ответ API для сохраненного пользователя:', response);
+
+              if (response?.success && response?.data) {
+                console.log(
+                  'Сохраненный пользователь загружен:',
+                  response.data
+                );
+                setAppUser(response.data);
+                setIsReady(true);
+                return;
+              }
+            } catch (error) {
+              console.error(
+                'Ошибка загрузки сохраненного пользователя:',
+                error
+              );
+              // Очищаем localStorage при ошибке
+              localStorage.removeItem('userId');
+              localStorage.removeItem('authToken');
+            }
           }
-        }
-        
-        // Если нет - создаем тестового
-        else {
-          console.log('Создание тестового пользователя...');
+
+          // Если нет сохраненного пользователя или произошла ошибка, создаем тестового
+          console.log('Создание тестового пользователя для режима браузера');
           const testUser = {
             id: 12345678,
             username: 'testuser',
             first_name: 'Test',
-            photo_url: 'https://api.dicebear.com/7.x/avataaars/svg?seed=TestUser'
+            photo_url:
+              'https://api.dicebear.com/7.x/avataaars/svg?seed=TestUser',
+            telegram_id: 12345678,
+            balance_stars: 1000,
+            has_ton_wallet: false,
           };
-          setUser(testUser);
+
+          setUser(testUser as any);
           setAppUser(testUser as any);
+          setIsReady(true);
+        } else {
+          console.log('Ожидание готовности Telegram WebApp...');
         }
+      } catch (err) {
+        console.error('Исключение при инициализации пользователя:', err);
+        setError(err instanceof Error ? err.message : 'Неизвестная ошибка');
+      } finally {
+        setIsInitializing(false);
       }
-      
-      setIsReady(true);
     };
 
-    initializeUser();
-  }, [webAppReady, webAppUser, isInitializing]);
+    // Запускаем инициализацию
+    if ((webAppReady && webAppUser) || !window.Telegram?.WebApp) {
+      console.log(
+        'Условия для инициализации выполнены, запускаем initializeUser'
+      );
+      initializeUser();
+    } else {
+      console.log(
+        'Ожидание готовности Telegram WebApp или данных пользователя'
+      );
+    }
+  }, [webAppReady, webAppUser, isInitializing, isReady, appUser]);
 
   // Предоставляем экземпляр WebApp для прямого доступа к методам Telegram
   return {

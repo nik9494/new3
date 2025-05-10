@@ -51,7 +51,11 @@ export default function Profile() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!user?.id) return;
+    // Проверяем наличие пользователя и appUser
+    if (!user?.id && !appUser?.id) {
+      console.log('Нет данных пользователя для загрузки профиля');
+      return;
+    }
 
     (async () => {
       setIsLoading(true);
@@ -59,7 +63,11 @@ export default function Profile() {
       let data: ProfileData | null = null;
 
       try {
-        console.log('Загрузка профиля для пользователя:', user.id);
+        // Определяем ID пользователя для запроса
+        const userId = appUser?.id || localStorage.getItem('userId');
+        const telegramId = user?.id;
+
+        console.log('Загрузка профиля:', { userId, telegramId });
 
         // Функция для выполнения запроса с повторными попытками
         const fetchWithRetry = async (url: string, maxRetries = 3) => {
@@ -68,7 +76,13 @@ export default function Profile() {
           while (retryCount < maxRetries) {
             try {
               console.log(`Попытка ${retryCount + 1}/${maxRetries} для ${url}`);
-              const response = await fetchData<ProfileData>(url);
+              const response = await fetchData<ProfileData>(url, {
+                headers: {
+                  'Cache-Control': 'no-cache, no-store, must-revalidate',
+                  Pragma: 'no-cache',
+                  Expires: '0',
+                },
+              });
               return response;
             } catch (retryError) {
               retryCount++;
@@ -86,93 +100,104 @@ export default function Profile() {
           throw new Error('Превышено максимальное количество попыток');
         };
 
-        // Первый запрос по Telegram ID
-        try {
-  console.log('Пробуем загрузить профиль:', user.id);
-  
-  // Определяем URL в зависимости от платформы
-  const url = window.Telegram?.WebApp 
-    ? `/api/users/telegram/${user.id}`
-    : `/api/users/${user.id}`;
-
-  const resp = await fetchWithRetry(url);
-
-  if (resp.success && resp.data) {
-    console.log('Профиль успешно загружен');
-    data = resp.data;
-    localStorage.setItem('userId', data.user.id);
-    if (resp.token) localStorage.setItem('authToken', resp.token);
-    setProfileData(data);
-    setIsLoading(false);
-    return;
-  }
-} catch (telegramIdError) {
-          console.log(
-            'Не удалось загрузить профиль по Telegram ID:',
-            telegramIdError
-          );
-        }
-
-        // Fallback по localStorage
-        const stored = localStorage.getItem('userId');
-        if (stored) {
+        // Приоритет 1: Используем ID из appUser (если есть)
+        if (userId) {
           try {
-            console.log(
-              'Пробуем загрузить профиль по ID из localStorage:',
-              stored
-            );
-            const resp = await fetchWithRetry(`/api/users/${stored}`);
+            console.log('Загрузка профиля по ID пользователя:', userId);
+            const resp = await fetchWithRetry(`/api/users/${userId}`);
 
             if (resp.success && resp.data) {
-              console.log('Профиль успешно загружен по ID из localStorage');
+              console.log('Профиль успешно загружен по ID:', resp.data);
               data = resp.data;
-              // Обновляем токен если он есть
+              localStorage.setItem('userId', data.user.id);
               if (resp.token) localStorage.setItem('authToken', resp.token);
               setProfileData(data);
               setIsLoading(false);
               return;
             }
-          } catch (localStorageError) {
-            console.log(
-              'Не удалось загрузить профиль по ID из localStorage:',
-              localStorageError
-            );
+          } catch (userIdError) {
+            console.error('Ошибка загрузки профиля по ID:', userIdError);
+            // Очищаем localStorage, если ID недействителен
+            localStorage.removeItem('userId');
           }
         }
 
-        // Если все попытки не удались, пробуем инициализировать пользователя
-        try {
-          console.log('Пробуем инициализировать пользователя:', user.id);
-          const initResp = await fetchData('/api/users/init', {
-            method: 'POST',
-            body: JSON.stringify({
-              telegram_id: user.id,
-              username: user.username || `User_${user.id}`,
-              first_name: user.first_name,
-              last_name: user.last_name,
-              photo_url: user.photo_url,
-            }),
-          });
+        // Приоритет 2: Используем Telegram ID (если есть)
+        if (telegramId) {
+          try {
+            console.log('Загрузка профиля по Telegram ID:', telegramId);
+            const resp = await fetchWithRetry(
+              `/api/users/telegram/${telegramId}`
+            );
 
-          if (initResp.success && initResp.data?.user) {
-            console.log('Пользователь успешно инициализирован');
-            // Теперь загружаем профиль
-            const userId = initResp.data.user.id;
-            localStorage.setItem('userId', userId);
-            if (initResp.token)
-              localStorage.setItem('authToken', initResp.token);
-
-            const profileResp = await fetchWithRetry(`/api/users/${userId}`);
-            if (profileResp.success && profileResp.data) {
-              console.log('Профиль успешно загружен после инициализации');
-              data = profileResp.data;
+            if (resp.success && resp.data) {
+              console.log(
+                'Профиль успешно загружен по Telegram ID:',
+                resp.data
+              );
+              data = resp.data;
+              localStorage.setItem('userId', data.user.id);
+              if (resp.token) localStorage.setItem('authToken', resp.token);
               setProfileData(data);
               setIsLoading(false);
               return;
             }
+          } catch (telegramIdError) {
+            console.error(
+              'Ошибка загрузки профиля по Telegram ID:',
+              telegramIdError
+            );
           }
-        } catch (initError) {
-          console.log('Не удалось инициализировать пользователя:', initError);
+        }
+
+        // Приоритет 3: Инициализация нового пользователя (если есть Telegram ID)
+        if (telegramId) {
+          try {
+            console.log('Инициализация нового пользователя:', telegramId);
+            const initResp = await fetchData('/api/users/init', {
+              method: 'POST',
+              body: JSON.stringify({
+                telegram_id: telegramId,
+                username: user?.username || `User_${telegramId}`,
+                first_name: user?.first_name,
+                last_name: user?.last_name,
+                photo_url: user?.photo_url,
+              }),
+              headers: {
+                'Cache-Control': 'no-cache, no-store, must-revalidate',
+                Pragma: 'no-cache',
+                Expires: '0',
+              },
+            });
+
+            if (initResp.success && initResp.data?.user) {
+              console.log(
+                'Пользователь успешно инициализирован:',
+                initResp.data
+              );
+              // Теперь загружаем профиль
+              const newUserId = initResp.data.user.id;
+              localStorage.setItem('userId', newUserId);
+              if (initResp.token)
+                localStorage.setItem('authToken', initResp.token);
+
+              const profileResp = await fetchWithRetry(
+                `/api/users/${newUserId}`
+              );
+              if (profileResp.success && profileResp.data) {
+                console.log(
+                  'Профиль успешно загружен после инициализации:',
+                  profileResp.data
+                );
+                data = profileResp.data;
+                setProfileData(data);
+                setIsLoading(false);
+                return;
+              }
+            }
+          } catch (initError) {
+            console.error('Ошибка инициализации пользователя:', initError);
+          }
         }
 
         // Если все методы не сработали
@@ -184,7 +209,7 @@ export default function Profile() {
         setIsLoading(false);
       }
     })();
-  }, [user?.id]);
+  }, [user?.id, appUser?.id]);
 
   const copyReferralCode = () => {
     if (profileData?.referral?.code) {

@@ -72,6 +72,8 @@ export default function useTelegramWebApp() {
   const [isReady, setIsReady] = useState(false);
 
   useEffect(() => {
+    console.log('Инициализация useTelegramWebApp...');
+
     // Check if Telegram WebApp is available
     if (window.Telegram?.WebApp) {
       const tgWebApp = window.Telegram.WebApp;
@@ -81,11 +83,19 @@ export default function useTelegramWebApp() {
 
       // Set the WebApp state
       setWebApp(tgWebApp);
-      setIsReady(true);
 
       // Extract user data if available
       if (tgWebApp.initDataUnsafe?.user) {
+        console.log(
+          'Найдены данные пользователя Telegram:',
+          tgWebApp.initDataUnsafe.user
+        );
         setUser(tgWebApp.initDataUnsafe.user);
+      } else {
+        console.warn(
+          'Данные пользователя Telegram отсутствуют в initDataUnsafe'
+        );
+        console.log('Полные данные initDataUnsafe:', tgWebApp.initDataUnsafe);
       }
 
       // Expand the WebApp to take full screen
@@ -93,18 +103,27 @@ export default function useTelegramWebApp() {
         tgWebApp.expand();
       }
 
-      console.log('Telegram WebApp initialized successfully');
-      console.log('User data:', tgWebApp.initDataUnsafe?.user);
+      console.log('Telegram WebApp инициализирован успешно');
+      setIsReady(true);
     } else {
-      console.log('Telegram WebApp is not available, running in browser mode');
-      // Mock user for development in browser
-      setUser({
-        id: 12345678,
-        first_name: 'Test',
-        last_name: 'User',
-        username: 'testuser',
-        photo_url: 'https://api.dicebear.com/7.x/avataaars/svg?seed=TestUser',
-      });
+      console.log('Telegram WebApp недоступен, запуск в режиме браузера');
+      // Проверяем, есть ли сохраненный пользователь в localStorage
+      const savedUserId = localStorage.getItem('userId');
+
+      if (!savedUserId) {
+        // Только если нет сохраненного пользователя, создаем тестового
+        console.log('Создание тестового пользователя для режима браузера');
+        setUser({
+          id: 12345678,
+          first_name: 'Test',
+          last_name: 'User',
+          username: 'testuser',
+          photo_url: 'https://api.dicebear.com/7.x/avataaars/svg?seed=TestUser',
+        });
+      } else {
+        console.log('Найден сохраненный пользователь, не создаем тестового');
+      }
+
       setIsReady(true);
     }
   }, []);

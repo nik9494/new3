@@ -8,6 +8,7 @@ import { Server } from 'socket.io';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 import { apiRateLimit, tapRateLimit, detectVPN } from './middleware/auth.js';
 import path from 'path';
 import fs from 'fs';
@@ -45,7 +46,7 @@ const PORT = process.env.PORT || 3001;
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const MINI_APP_URL =
   process.env.MINI_APP_URL ||
-  'https://booty-sure-telephone-owner.trycloudflare.com';
+  'https://consists-coastal-fight-charms.trycloudflare.com';
 
 // Database connection
 const { Pool } = pg;
@@ -126,28 +127,31 @@ const server = http.createServer(app);
 
 // Настройка Trust Proxy в Express
 app.set('trust proxy', [
-  'loopback', 
-  'linklocal', 
+  'loopback',
+  'linklocal',
   'uniquelocal',
-  '173.245.48.0/20',    // Cloudflare IPv4
-  '2400:cb00::/32',     // Cloudflare IPv6
-  '10.0.0.0/8',         // Локальные сети
-  '172.16.0.0/12',      // Docker
-  '192.168.0.0/16'      // Локальные сети
+  '173.245.48.0/20', // Cloudflare IPv4
+  '2400:cb00::/32', // Cloudflare IPv6
+  '10.0.0.0/8', // Локальные сети
+  '172.16.0.0/12', // Docker
+  '192.168.0.0/16', // Локальные сети
 ]);
 
 // Parse Mini App URL for CORS configuration
 const allowedOrigins = [
-  'https://booty-sure-telephone-owner.trycloudflare.com',
+  'https://consists-coastal-fight-charms.trycloudflare.com',
   'https://web.telegram.org',
-  'https://telegram.org'
+  'https://telegram.org',
 ];
 
 // Initialize Socket.IO
 const io = new Server(server, {
   cors: {
     origin: (origin, callback) => {
-      if (!origin || allowedOrigins.some(allowed => origin.startsWith(allowed))) {
+      if (
+        !origin ||
+        allowedOrigins.some(allowed => origin.startsWith(allowed))
+      ) {
         callback(null, true);
       } else {
         callback(new Error('Not allowed by CORS'));
@@ -180,38 +184,70 @@ app.use(
 );
 
 // Оптимизация CORS
-app.use(cors({
-  origin: (origin, callback) => {
-    console.log('Request origin:', origin);
-    if (!origin || allowedOrigins.some(allowed => origin.startsWith(allowed))) {
-      callback(null, true);
-    } else {
-      console.error('CORS blocked:', origin);
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: [
-    'Content-Type',
-    'Authorization',
-    'X-Telegram-Init-Data',
-    'X-User-ID',
-    'Origin',
-    'Accept',
-    'X-Requested-With',
-  ],
-  exposedHeaders: ['X-Auth-Token'],
-}));
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      console.log('Request origin:', origin);
+      if (
+        !origin ||
+        allowedOrigins.some(allowed => origin.startsWith(allowed))
+      ) {
+        callback(null, true);
+      } else {
+        console.error('CORS blocked:', origin);
+        callback(new Error('Not allowed by CORS'));
+      }
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'X-Telegram-Init-Data',
+      'X-User-ID',
+      'Origin',
+      'Accept',
+      'X-Requested-With',
+    ],
+    exposedHeaders: ['X-Auth-Token'],
+  })
+);
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Global rate limiting
+// Global rate limiting с более мягкими ограничениями
 app.use(
   apiRateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 100,
+    windowMs: 15 * 60 * 1000, // 15 минут
+    max: 300, // Увеличиваем лимит до 300 запросов за 15 минут
+  })
+);
+
+// Отдельный rate limiter для критических эндпоинтов с более высоким лимитом
+app.use(
+  '/api/users/telegram',
+  rateLimit({
+    windowMs: 60 * 1000, // 1 минута
+    max: 20, // 20 запросов в минуту
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: {
+      error: 'Слишком много запросов к API пользователя - попробуйте позже.',
+    },
+  })
+);
+
+app.use(
+  '/api/users/init',
+  rateLimit({
+    windowMs: 60 * 1000, // 1 минута
+    max: 10, // 10 запросов в минуту
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: {
+      error: 'Слишком много запросов инициализации - попробуйте позже.',
+    },
   })
 );
 
@@ -254,7 +290,7 @@ app.get('/api/health', (req, res) => {
     environment: process.env.NODE_ENV || 'development',
     clientIp: req.ip,
     cloudflareIp: req.headers['cf-connecting-ip'],
-    realIp: req.headers['x-real-ip'] // Дополнительная проверка
+    realIp: req.headers['x-real-ip'], // Дополнительная проверка
   });
 });
 

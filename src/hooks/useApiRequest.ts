@@ -69,6 +69,12 @@ export function useApiRequest() {
           console.log(`Добавлен X-User-ID в заголовки: ${user.id}`);
         }
 
+        // Добавляем Telegram WebApp initData, если доступно
+        if (window.Telegram?.WebApp?.initData) {
+          headers['X-Telegram-Init-Data'] = window.Telegram.WebApp.initData;
+          console.log('Добавлен X-Telegram-Init-Data в заголовки');
+        }
+
         // Формируем URL
         const url = endpoint.startsWith('http')
           ? endpoint

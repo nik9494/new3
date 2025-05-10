@@ -14,17 +14,74 @@
  */
 
 // Функция для debounce запросов
-const debounce = <T extends (...args: any[]) => Promise<any>>(fn: T, delay: number) => {
+const debounce = <T extends (...args: any[]) => Promise<any>>(
+  fn: T,
+  delay: number
+) => {
   let timer: NodeJS.Timeout;
   return (...args: Parameters<T>): ReturnType<T> => {
     clearTimeout(timer);
     return new Promise((resolve, reject) => {
       timer = setTimeout(() => {
-        fn(...args).then(resolve).catch(reject);
+        fn(...args)
+          .then(resolve)
+          .catch(reject);
       }, delay);
     }) as ReturnType<T>;
   };
 };
+
+// Кэш для предотвращения дублирующих запросов
+interface RequestCache {
+  [key: string]: {
+    promise: Promise<any>;
+    timestamp: number;
+  };
+}
+
+// Инициализируем кэш из localStorage или создаем новый
+let requestCache: RequestCache = {};
+const CACHE_TTL = 3000; // 3 секунды
+
+// Функция для очистки всего кэша
+const clearCache = (): void => {
+  requestCache = {};
+  console.log('Кэш API запросов очищен');
+};
+
+// Экспортируем функцию очистки кэша
+export const clearApiCache = clearCache;
+
+// Функция для создания ключа кэша
+const createCacheKey = (endpoint: string, options: RequestInit): string => {
+  const method = options.method || 'GET';
+  const body = options.body ? JSON.stringify(options.body) : '';
+  return `${method}:${endpoint}:${body}`;
+};
+
+// Проверка, нужно ли пропустить кэширование для критических эндпоинтов
+const shouldSkipCache = (endpoint: string): boolean => {
+  const criticalEndpoints = [
+    '/users/telegram/',
+    '/users/init',
+    '/users/profile',
+  ];
+
+  return criticalEndpoints.some(critical => endpoint.includes(critical));
+};
+
+// Функция для очистки устаревших записей кэша
+const cleanupCache = (): void => {
+  const now = Date.now();
+  Object.keys(requestCache).forEach(key => {
+    if (now - requestCache[key].timestamp > CACHE_TTL) {
+      delete requestCache[key];
+    }
+  });
+};
+
+// Запускаем периодическую очистку кэша
+setInterval(cleanupCache, CACHE_TTL);
 
 // Общий интерфейс для всех ответов API
 export interface ApiResponse<T> {
@@ -159,8 +216,78 @@ async function baseFetchApi<T>(
 ): Promise<T> {
   const url = `${API_BASE_URL}${endpoint}`;
   const headers = { ...getHeaders(), ...(options.headers ?? {}) };
+  const method = options.method || 'GET';
 
-  console.log(`API Request: ${options.method || 'GET'} ${endpoint}`);
+  // Для GET запросов используем кэширование и дедупликацию, если это не критический эндпоинт
+  if (method === 'GET' && !shouldSkipCache(endpoint)) {
+    const cacheKey = createCacheKey(endpoint, options);
+
+    // Если запрос уже выполняется, возвращаем существующий промис
+    if (
+      requestCache[cacheKey] &&
+      Date.now() - requestCache[cacheKey].timestamp < CACHE_TTL
+    ) {
+      console.log(`Используем кэшированный запрос для: ${method} ${endpoint}`);
+      return requestCache[cacheKey].promise;
+    }
+
+    // Создаем новый запрос и сохраняем его в кэше
+    const promise = (async () => {
+      console.log(`API Request: ${method} ${endpoint}`);
+
+      try {
+        const response = await fetch(url, {
+          ...options,
+          headers,
+        });
+
+        // Log response status
+        console.log(
+          `API Response: ${response.status} ${response.statusText} for ${endpoint}`
+        );
+
+        let payload;
+        const contentType = response.headers.get('content-type');
+        if (contentType && contentType.includes('application/json')) {
+          payload = await response.json();
+        } else {
+          const text = await response.text();
+          console.warn('Non-JSON response:', text);
+          payload = { message: text };
+        }
+
+        if (!response.ok) {
+          console.error('API Error:', payload);
+          throw new Error(payload.message || `Error ${response.status}`);
+        }
+
+        // Save new JWT token from response header if provided
+        const newToken = response.headers.get('X-Auth-Token');
+        if (newToken) {
+          localStorage.setItem('authToken', newToken);
+          console.log('New auth token received and stored');
+        }
+
+        return payload as T;
+      } catch (error) {
+        console.error(`API Error for ${endpoint}:`, error);
+        // Удаляем запрос из кэша при ошибке
+        delete requestCache[cacheKey];
+        throw error;
+      }
+    })();
+
+    // Сохраняем промис в кэше
+    requestCache[cacheKey] = {
+      promise,
+      timestamp: Date.now(),
+    };
+
+    return promise;
+  }
+
+  // Для не-GET запросов не используем кэширование
+  console.log(`API Request: ${method} ${endpoint}`);
 
   try {
     const response = await fetch(url, {
@@ -246,6 +373,26 @@ export const userApi = {
   },
 
   /**
+   * Fetch user by Telegram ID without cache
+   */
+  getUserByTelegramIdWithoutCache: (
+    telegramId: number
+  ): Promise<ApiResponse<UserResponseData>> => {
+    console.log(`Запрос пользователя по Telegram ID без кэша: ${telegramId}`);
+    return fetchApiWithoutDebounce<ApiResponse<UserResponseData>>(
+      `/users/telegram/${telegramId}`
+    );
+  },
+
+  /**
+   * Fetch profile of authenticated user without cache
+   */
+  getUserProfileWithoutCache: (userId: string): Promise<ApiResponse<User>> => {
+    console.log(`Запрос профиля пользователя без кэша: ${userId}`);
+    return fetchApiWithoutDebounce<ApiResponse<User>>(`/users/${userId}`);
+  },
+
+  /**
    * Initialize or get current user via Telegram WebApp data
    * Stores userId and authToken in localStorage
    */
@@ -293,6 +440,66 @@ export const userApi = {
     }
 
     // Шаг 4. Возвращаем уже унифицированный ответ
+    return normalized;
+  },
+
+  /**
+   * Initialize user without cache
+   */
+  initUserWithoutCache: async (
+    tg: InitUserParams
+  ): Promise<ApiResponse<UserResponseData>> => {
+    console.log('Инициализация пользователя без кэша:', tg);
+
+    // Очищаем кэш перед запросом
+    localStorage.removeItem('api_cache');
+
+    // Отправляем запрос без использования кэша
+    const payload = await fetchApiWithoutDebounce<any>('/users/init', {
+      method: 'POST',
+      body: JSON.stringify({
+        telegram_id: tg.telegram_id,
+        username: tg.username || `User_${tg.telegram_id}`,
+        first_name: tg.first_name,
+        last_name: tg.last_name,
+        photo_url: tg.photo_url,
+      }),
+      headers: {
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        Pragma: 'no-cache',
+        Expires: '0',
+      },
+    });
+
+    console.log('Ответ инициализации без кэша:', payload);
+
+    // Нормализуем ответ
+    const normalized: ApiResponse<UserResponseData> = {
+      success: payload.success,
+      message: payload.message,
+      token: payload.token,
+      data: {
+        user: payload.data?.user ?? payload.user,
+        wallet: payload.data?.wallet,
+        stats: payload.data?.stats,
+        referral: payload.data?.referral,
+      },
+    };
+
+    // Сохраняем в localStorage
+    if (normalized.data?.user?.id) {
+      localStorage.setItem('userId', normalized.data.user.id);
+      console.log(
+        'ID пользователя сохранен в localStorage:',
+        normalized.data.user.id
+      );
+    }
+
+    if (normalized.token) {
+      localStorage.setItem('authToken', normalized.token);
+      console.log('Токен авторизации сохранен в localStorage');
+    }
+
     return normalized;
   },
 
