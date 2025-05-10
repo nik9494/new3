@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTelegram } from '../hooks/useTelegram';
 import { useApiRequest } from '../hooks/useApiRequest';
@@ -42,6 +42,18 @@ interface ProfileData {
   };
 }
 
+// Новый интерфейс для ответа от API при инициализации пользователя
+interface InitResponseData {
+  user: {
+    id: string;
+    username: string;
+    telegram_id: number;
+    balance_stars: number;
+    has_ton_wallet: boolean;
+  };
+  token?: string;
+}
+
 export default function Profile() {
   const navigate = useNavigate();
   const { user, appUser } = useTelegram();
@@ -50,69 +62,52 @@ export default function Profile() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Используем useRef для отслеживания, был ли уже загружен профиль
+  const profileLoaded = useRef(false);
+
   useEffect(() => {
-    // Проверяем наличие пользователя и appUser
-    if (!user?.id && !appUser?.id) {
-      console.log('Нет данных пользователя для загрузки профиля');
+    // Если профиль уже загружен, не делаем повторный запрос
+    if (profileLoaded.current || (!user?.id && !appUser?.id)) {
+      console.log('Профиль уже загружен или нет данных пользователя');
       return;
     }
+
+    let mounted = true; // Флаг для отслеживания размонтирования компонента
 
     (async () => {
       setIsLoading(true);
       setError(null);
-      let data: ProfileData | null = null;
 
       try {
-        // Определяем ID пользователя для запроса
         const userId = appUser?.id || localStorage.getItem('userId');
         const telegramId = user?.id;
 
         console.log('Загрузка профиля:', { userId, telegramId });
-
-        // Функция для выполнения запроса с повторными попытками
-        const fetchWithRetry = async (url: string, maxRetries = 3) => {
-          let retryCount = 0;
-
-          while (retryCount < maxRetries) {
-            try {
-              console.log(`Попытка ${retryCount + 1}/${maxRetries} для ${url}`);
-              const response = await fetchData<ProfileData>(url, {
-                headers: {
-                  'Cache-Control': 'no-cache, no-store, must-revalidate',
-                  Pragma: 'no-cache',
-                  Expires: '0',
-                },
-              });
-              return response;
-            } catch (retryError) {
-              retryCount++;
-              console.log(
-                `Ошибка попытки ${retryCount}/${maxRetries}:`,
-                retryError
-              );
-              if (retryCount >= maxRetries) throw retryError;
-              // Ждем перед следующей попыткой (экспоненциальная задержка)
-              await new Promise(resolve =>
-                setTimeout(resolve, 1000 * Math.pow(2, retryCount))
-              );
-            }
-          }
-          throw new Error('Превышено максимальное количество попыток');
+        
+        // Заголовки для no-cache
+        const noCacheHeaders = {
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          Pragma: 'no-cache',
+          Expires: '0',
         };
 
         // Приоритет 1: Используем ID из appUser (если есть)
+        let resp;
         if (userId) {
           try {
             console.log('Загрузка профиля по ID пользователя:', userId);
-            const resp = await fetchWithRetry(`/api/users/${userId}`);
+            resp = await fetchData<ProfileData>(`/api/users/${userId}`, {
+              headers: noCacheHeaders,
+            });
 
             if (resp.success && resp.data) {
               console.log('Профиль успешно загружен по ID:', resp.data);
-              data = resp.data;
-              localStorage.setItem('userId', data.user.id);
+              localStorage.setItem('userId', resp.data.user.id);
               if (resp.token) localStorage.setItem('authToken', resp.token);
-              setProfileData(data);
-              setIsLoading(false);
+              if (mounted) {
+                setProfileData(resp.data);
+                profileLoaded.current = true;
+              }
               return;
             }
           } catch (userIdError) {
@@ -126,27 +121,22 @@ export default function Profile() {
         if (telegramId) {
           try {
             console.log('Загрузка профиля по Telegram ID:', telegramId);
-            const resp = await fetchWithRetry(
-              `/api/users/telegram/${telegramId}`
-            );
+            resp = await fetchData<ProfileData>(`/api/users/telegram/${telegramId}`, {
+              headers: noCacheHeaders,
+            });
 
             if (resp.success && resp.data) {
-              console.log(
-                'Профиль успешно загружен по Telegram ID:',
-                resp.data
-              );
-              data = resp.data;
-              localStorage.setItem('userId', data.user.id);
+              console.log('Профиль успешно загружен по Telegram ID:', resp.data);
+              localStorage.setItem('userId', resp.data.user.id);
               if (resp.token) localStorage.setItem('authToken', resp.token);
-              setProfileData(data);
-              setIsLoading(false);
+              if (mounted) {
+                setProfileData(resp.data);
+                profileLoaded.current = true;
+              }
               return;
             }
           } catch (telegramIdError) {
-            console.error(
-              'Ошибка загрузки профиля по Telegram ID:',
-              telegramIdError
-            );
+            console.error('Ошибка загрузки профиля по Telegram ID:', telegramIdError);
           }
         }
 
@@ -154,7 +144,7 @@ export default function Profile() {
         if (telegramId) {
           try {
             console.log('Инициализация нового пользователя:', telegramId);
-            const initResp = await fetchData('/api/users/init', {
+            const initResp = await fetchData<InitResponseData>('/api/users/init', {
               method: 'POST',
               body: JSON.stringify({
                 telegram_id: telegramId,
@@ -163,35 +153,27 @@ export default function Profile() {
                 last_name: user?.last_name,
                 photo_url: user?.photo_url,
               }),
-              headers: {
-                'Cache-Control': 'no-cache, no-store, must-revalidate',
-                Pragma: 'no-cache',
-                Expires: '0',
-              },
+              headers: noCacheHeaders,
             });
 
             if (initResp.success && initResp.data?.user) {
-              console.log(
-                'Пользователь успешно инициализирован:',
-                initResp.data
-              );
+              console.log('Пользователь успешно инициализирован:', initResp.data);
+              
               // Теперь загружаем профиль
               const newUserId = initResp.data.user.id;
               localStorage.setItem('userId', newUserId);
-              if (initResp.token)
-                localStorage.setItem('authToken', initResp.token);
+              if (initResp.token) localStorage.setItem('authToken', initResp.token);
 
-              const profileResp = await fetchWithRetry(
-                `/api/users/${newUserId}`
-              );
+              const profileResp = await fetchData<ProfileData>(`/api/users/${newUserId}`, {
+                headers: noCacheHeaders,
+              });
+              
               if (profileResp.success && profileResp.data) {
-                console.log(
-                  'Профиль успешно загружен после инициализации:',
-                  profileResp.data
-                );
-                data = profileResp.data;
-                setProfileData(data);
-                setIsLoading(false);
+                console.log('Профиль успешно загружен после инициализации:', profileResp.data);
+                if (mounted) {
+                  setProfileData(profileResp.data);
+                  profileLoaded.current = true;
+                }
                 return;
               }
             }
@@ -201,15 +183,26 @@ export default function Profile() {
         }
 
         // Если все методы не сработали
-        setError('Не удалось загрузить профиль');
+        if (mounted) {
+          setError('Не удалось загрузить профиль');
+        }
       } catch (err) {
-        setError('Ошибка загрузки данных профиля');
+        if (mounted) {
+          setError('Ошибка загрузки данных профиля');
+        }
         console.error('Ошибка данных профиля:', err);
       } finally {
-        setIsLoading(false);
+        if (mounted) {
+          setIsLoading(false);
+        }
       }
     })();
-  }, [user?.id, appUser?.id]);
+
+    // Функция очистки при размонтировании компонента
+    return () => {
+      mounted = false;
+    };
+  }, [user?.id, appUser?.id, fetchData]);
 
   const copyReferralCode = () => {
     if (profileData?.referral?.code) {
@@ -221,21 +214,62 @@ export default function Profile() {
   const shareReferralCode = () => {
     if (!profileData?.referral?.code) return;
 
-    if (window.Telegram?.WebApp) {
-      window.Telegram.WebApp.switchInlineQuery(
-        `код ${profileData.referral.code}`,
-        ['users', 'groups', 'channels']
-      );
-    } else {
-      navigator
-        .share({
-          title: 'Join Tap Battle!',
-          text: `Use my referral code ${profileData.referral.code} to get 100 Stars bonus!`,
-          url: window.location.origin,
-        })
-        .catch(() => {
-          alert(`Share this code with friends: ${profileData.referral.code}`);
-        });
+    try {
+      if (window.Telegram?.WebApp) {
+        // Проверяем, поддерживается ли inline режим
+        try {
+          // Используем any для обхода проблемы с типизацией
+          const webApp = window.Telegram.WebApp as any;
+          if (typeof webApp.switchInlineQuery === 'function') {
+            webApp.switchInlineQuery(`код ${profileData.referral.code}`, [
+              'users',
+              'groups',
+              'channels',
+            ]);
+          } else {
+            throw new Error('switchInlineQuery не поддерживается');
+          }
+        } catch (error) {
+          console.log(
+            'Inline режим не поддерживается, используем альтернативный способ'
+          );
+          // Если inline режим не поддерживается, используем копирование в буфер обмена
+          navigator.clipboard.writeText(
+            `Присоединяйтесь к Tap Battle! Используйте мой код ${profileData.referral.code} и получите 100 Stars бесплатно! ${window.location.origin}`
+          );
+          alert(
+            `Код скопирован в буфер обмена: ${profileData.referral.code}\n\nВы можете вставить его в любой чат.`
+          );
+        }
+      } else {
+        // Для обычных браузеров используем Web Share API
+        if (navigator.share) {
+          navigator
+            .share({
+              title: 'Присоединяйтесь к Tap Battle!',
+              text: `Используйте мой код ${profileData.referral.code} и получите 100 Stars бесплатно!`,
+              url: window.location.origin,
+            })
+            .catch(() => {
+              // Если Web Share API не поддерживается или пользователь отменил
+              navigator.clipboard.writeText(
+                `Присоединяйтесь к Tap Battle! Используйте мой код ${profileData.referral.code} и получите 100 Stars бесплатно! ${window.location.origin}`
+              );
+              alert(
+                `Код скопирован в буфер обмена: ${profileData.referral.code}`
+              );
+            });
+        } else {
+          // Если Web Share API не поддерживается
+          navigator.clipboard.writeText(
+            `Присоединяйтесь к Tap Battle! Используйте мой код ${profileData.referral.code} и получите 100 Stars бесплатно! ${window.location.origin}`
+          );
+          alert(`Код скопирован в буфер обмена: ${profileData.referral.code}`);
+        }
+      }
+    } catch (error) {
+      console.error('Ошибка при попытке поделиться кодом:', error);
+      alert(`Ваш реферальный код: ${profileData.referral.code}`);
     }
   };
 
@@ -454,7 +488,9 @@ export default function Profile() {
                           '/api/referrals/generate',
                           {
                             method: 'POST',
-                            body: JSON.stringify({ user_id: user?.id }),
+                            body: JSON.stringify({
+                              user_id: profileData.user.id,
+                            }),
                           }
                         );
                         if (response.success) {
@@ -523,7 +559,7 @@ export default function Profile() {
                           {
                             method: 'POST',
                             body: JSON.stringify({
-                              user_id: user?.id,
+                              user_id: profileData.user.id,
                               amount: numAmount,
                             }),
                           }

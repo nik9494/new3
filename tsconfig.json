@@ -12,15 +12,16 @@
     "isolatedModules": true,
     "noEmit": true,
     "jsx": "react-jsx",
-    "strict": false,
+    "strict": true,
     "paths": {
       "@/*": ["./src/*"]
     }
   },
   "include": [
-    "src",      // ваши React‑файлы  
-    "server"    // теперь также будет читаться папка server/telegramSDK.ts :contentReference[oaicite:0]{index=0}:contentReference[oaicite:1]{index=1}
-, "vite-env.d.ts"  ],
+    "src",
+    "server",
+    "vite-env.d.ts"
+  ],
   "exclude": [],
   "references": [
     { "path": "./tsconfig.node.json" }

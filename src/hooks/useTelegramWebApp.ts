@@ -56,6 +56,8 @@ interface TelegramWebApp {
     notificationOccurred: (type: 'error' | 'success' | 'warning') => void;
     selectionChanged: () => void;
   };
+  // Добавляем опциональный метод switchInlineQuery
+  switchInlineQuery?: (query: string, targets?: string[]) => void;
 }
 
 declare global {

@@ -41,11 +41,15 @@ interface RequestCache {
 
 // Инициализируем кэш из localStorage или создаем новый
 let requestCache: RequestCache = {};
-const CACHE_TTL = 3000; // 3 секунды
+const CACHE_TTL = 2000; // 2 секунды
+
+// Отслеживаем активные запросы для предотвращения дублирования
+const activeRequests: Set<string> = new Set();
 
 // Функция для очистки всего кэша
 const clearCache = (): void => {
   requestCache = {};
+  activeRequests.clear();
   console.log('Кэш API запросов очищен');
 };
 
@@ -65,9 +69,18 @@ const shouldSkipCache = (endpoint: string): boolean => {
     '/users/telegram/',
     '/users/init',
     '/users/profile',
+    '/users/',
   ];
 
   return criticalEndpoints.some(critical => endpoint.includes(critical));
+};
+
+// Функция для отмены дублирующих запросов
+const cancelDuplicateRequests = (cacheKey: string): void => {
+  if (activeRequests.has(cacheKey)) {
+    console.log(`Дублирующий запрос предотвращен: ${cacheKey}`);
+    throw new Error('Запрос уже выполняется');
+  }
 };
 
 // Функция для очистки устаревших записей кэша
@@ -218,10 +231,11 @@ async function baseFetchApi<T>(
   const headers = { ...getHeaders(), ...(options.headers ?? {}) };
   const method = options.method || 'GET';
 
+  // Создаем ключ кэша для всех запросов (для отслеживания дублирования)
+  const cacheKey = createCacheKey(endpoint, options);
+
   // Для GET запросов используем кэширование и дедупликацию, если это не критический эндпоинт
   if (method === 'GET' && !shouldSkipCache(endpoint)) {
-    const cacheKey = createCacheKey(endpoint, options);
-
     // Если запрос уже выполняется, возвращаем существующий промис
     if (
       requestCache[cacheKey] &&
@@ -231,11 +245,31 @@ async function baseFetchApi<T>(
       return requestCache[cacheKey].promise;
     }
 
+    // Проверяем, не выполняется ли уже такой же запрос
+    if (activeRequests.has(cacheKey)) {
+      console.log(`Запрос уже выполняется, ожидаем: ${method} ${endpoint}`);
+      // Создаем новый промис, который разрешится, когда активный запрос завершится
+      return new Promise((resolve, reject) => {
+        const checkInterval = setInterval(() => {
+          if (!activeRequests.has(cacheKey) && requestCache[cacheKey]) {
+            clearInterval(checkInterval);
+            resolve(requestCache[cacheKey].promise);
+          } else if (!activeRequests.has(cacheKey)) {
+            clearInterval(checkInterval);
+            reject(new Error('Запрос был отменен'));
+          }
+        }, 100);
+      });
+    }
+
+    // Отмечаем запрос как активный
+    activeRequests.add(cacheKey);
+
     // Создаем новый запрос и сохраняем его в кэше
     const promise = (async () => {
-      console.log(`API Request: ${method} ${endpoint}`);
-
       try {
+        console.log(`API Request: ${method} ${endpoint}`);
+
         const response = await fetch(url, {
           ...options,
           headers,
@@ -274,20 +308,42 @@ async function baseFetchApi<T>(
         // Удаляем запрос из кэша при ошибке
         delete requestCache[cacheKey];
         throw error;
+      } finally {
+        // Удаляем запрос из списка активных
+        activeRequests.delete(cacheKey);
       }
     })();
 
     // Сохраняем промис в кэше
     requestCache[cacheKey] = {
-      promise,
+      promise: promise,
       timestamp: Date.now(),
     };
 
     return promise;
   }
 
-  // Для не-GET запросов не используем кэширование
+  // Для не-GET запросов или критических эндпоинтов
   console.log(`API Request: ${method} ${endpoint}`);
+
+  // Проверяем, не выполняется ли уже такой же запрос
+  if (activeRequests.has(cacheKey)) {
+    console.log(`Дублирующий запрос предотвращен: ${method} ${endpoint}`);
+    return new Promise((resolve, reject) => {
+      const checkInterval = setInterval(() => {
+        if (!activeRequests.has(cacheKey) && requestCache[cacheKey]) {
+          clearInterval(checkInterval);
+          resolve(requestCache[cacheKey].promise);
+        } else if (!activeRequests.has(cacheKey)) {
+          clearInterval(checkInterval);
+          reject(new Error('Запрос был отменен'));
+        }
+      }, 100);
+    });
+  }
+
+  // Отмечаем запрос как активный
+  activeRequests.add(cacheKey);
 
   try {
     const response = await fetch(url, {
@@ -322,10 +378,21 @@ async function baseFetchApi<T>(
       console.log('New auth token received and stored');
     }
 
+    // Сохраняем результат в кэше для возможного использования
+    if (method === 'GET') {
+      requestCache[cacheKey] = {
+        promise: Promise.resolve(payload as T),
+        timestamp: Date.now(),
+      };
+    }
+
     return payload as T;
   } catch (error) {
     console.error(`API Error for ${endpoint}:`, error);
     throw error;
+  } finally {
+    // Удаляем запрос из списка активных
+    activeRequests.delete(cacheKey);
   }
 }
 

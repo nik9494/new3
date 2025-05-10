@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import useTelegramWebApp from './useTelegramWebApp';
 import { userApi } from '../services/api';
 
@@ -47,6 +47,11 @@ export function useTelegram() {
   const [isInitializing, setIsInitializing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Используем useRef для отслеживания первого рендера
+  const isFirstRender = useRef(true);
+  // Используем useRef для отслеживания запросов в процессе
+  const requestInProgress = useRef(false);
+
   // Инициализируем пользователя с бэкендом, когда Telegram WebApp готов
   useEffect(() => {
     console.log('useTelegram useEffect запущен, состояние:', {
@@ -57,10 +62,12 @@ export function useTelegram() {
       isInitializing,
       isReady,
       appUser: appUser ? `${appUser.username} (${appUser.id})` : 'нет',
+      isFirstRender: isFirstRender.current,
+      requestInProgress: requestInProgress.current,
     });
 
     // Предотвращаем повторную инициализацию
-    if (isInitializing) {
+    if (isInitializing || requestInProgress.current) {
       console.log('Инициализация уже выполняется, пропускаем');
       return;
     }
@@ -71,10 +78,25 @@ export function useTelegram() {
       return;
     }
 
+    // Если это не первый рендер и нет изменений в зависимостях, пропускаем
+    if (
+      !isFirstRender.current &&
+      !webAppUser &&
+      !appUser &&
+      localStorage.getItem('userId')
+    ) {
+      console.log('Пропускаем повторную инициализацию без изменений в данных');
+      return;
+    }
+
+    // Отмечаем, что первый рендер завершен
+    isFirstRender.current = false;
+
     // Функция инициализации пользователя
     const initializeUser = async () => {
       console.log('Запуск initializeUser');
       setIsInitializing(true);
+      requestInProgress.current = true; // Отмечаем, что запрос начался
       setError(null);
 
       try {
@@ -240,6 +262,7 @@ export function useTelegram() {
         setError(err instanceof Error ? err.message : 'Неизвестная ошибка');
       } finally {
         setIsInitializing(false);
+        requestInProgress.current = false; // Отмечаем, что запрос завершен
       }
     };
 

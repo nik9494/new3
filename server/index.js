@@ -46,7 +46,7 @@ const PORT = process.env.PORT || 3001;
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const MINI_APP_URL =
   process.env.MINI_APP_URL ||
-  'https://consists-coastal-fight-charms.trycloudflare.com';
+  'https://mg-training-viewed-weblog.trycloudflare.com';
 
 // Database connection
 const { Pool } = pg;
@@ -139,7 +139,7 @@ app.set('trust proxy', [
 
 // Parse Mini App URL for CORS configuration
 const allowedOrigins = [
-  'https://consists-coastal-fight-charms.trycloudflare.com',
+  'https://mg-training-viewed-weblog.trycloudflare.com',
   'https://web.telegram.org',
   'https://telegram.org',
 ];
