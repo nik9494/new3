@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { useTelegram } from './useTelegram';
 
 interface ApiResponse<T = any> {
@@ -39,7 +39,7 @@ export function useApiRequest() {
     return 'http://localhost:3001';
   })();
 
-  const fetchData = async <T = any>(
+  const fetchData = useCallback(async <T = any>(
     endpoint: string,
     options: RequestInit = {}
   ): Promise<ApiResponse<T>> => {
@@ -141,7 +141,7 @@ export function useApiRequest() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [user?.id]); // Зависит только от user?.id
 
   return { fetchData, isLoading, error };
 }

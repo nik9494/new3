@@ -2,7 +2,6 @@ import React, { useState, useEffect } from "react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import UserHeader from "@/components/UserHeader";
 import BottomNavigation from "@/components/BottomNavigation";
 import useTelegram from "@/hooks/useTelegram";
 
@@ -153,16 +152,6 @@ const Leaderboard: React.FC = () => {
 
   return (
     <div className="flex flex-col min-h-screen bg-[#FFCA28]">
-      {/* User Header */}
-      <UserHeader
-        username={user?.username || "Player"}
-        avatarUrl={
-          user?.photo_url ||
-          "https://api.dicebear.com/7.x/avataaars/svg?seed=Felix"
-        }
-        starsBalance={1000}
-      />
-
       {/* Main Content */}
       <main className="flex-1 p-4 pb-20">
         <h1 className="text-2xl font-bold mb-4 text-center">Рейтинг игроков</h1>

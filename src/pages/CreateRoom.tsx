@@ -23,7 +23,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import UserHeader from '@/components/UserHeader';
 import BottomNavigation from '@/components/BottomNavigation';
 import useTelegram from '@/hooks/useTelegram';
 import { roomApi } from '@/services/api';
@@ -173,16 +172,6 @@ const CreateRoom: React.FC = () => {
 
   return (
     <div className="flex flex-col min-h-screen bg-[#FFCA28]">
-      {/* User Header */}
-      <UserHeader
-        username={user?.username || 'Player'}
-        avatarUrl={
-          user?.photo_url ||
-          'https://api.dicebear.com/7.x/avataaars/svg?seed=Felix'
-        }
-        starsBalance={appUser?.balance_stars || 0}
-      />
-
       {/* Main Content */}
       <main className="flex-1 p-4 pb-20">
         <h1 className="text-2xl font-bold mb-4 text-center">Hero Комнаты</h1>
