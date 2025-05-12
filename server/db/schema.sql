@@ -32,21 +32,23 @@ CREATE TABLE wallets (
 -- Create rooms table
 CREATE TABLE rooms (
   id UUID PRIMARY KEY,
-  creator_id UUID NOT NULL REFERENCES users(id),
+  creator_id UUID NOT NULL
+    REFERENCES users(id)
+    ON DELETE CASCADE,
   type VARCHAR(20) NOT NULL CHECK (type IN ('standard', 'bonus', 'hero')),
   entry_fee DECIMAL(10, 2) NOT NULL,
   max_players INTEGER NOT NULL,
   status VARCHAR(20) NOT NULL CHECK (status IN ('waiting', 'active', 'finished')),
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+  room_key VARCHAR(6) NOT NULL UNIQUE
 );
 
--- Create participants table
 CREATE TABLE participants (
   id UUID PRIMARY KEY,
   room_id UUID NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   joined_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
-  UNIQUE(room_id, user_id)
+  UNIQUE(room_id, user_id) -- Один пользователь не может войти в комнату дважды
 );
 
 -- Create games table

@@ -78,7 +78,7 @@ const CreateRoom: React.FC = () => {
 
       if (response && response.room_key) {
         setCreatedRoomKey(response.room_key);
-        setTimeLeft(600); // 10 minutes
+        setTimeLeft(300); // 5 minutes
         setShowSuccessDialog(true);
       } else {
         // Navigate to the game room
@@ -213,7 +213,7 @@ const CreateRoom: React.FC = () => {
                   <p className="text-sm">Информация о Hero комнатах:</p>
                   <ul className="text-xs mt-1 space-y-1 list-disc pl-4">
                     <li>До 30 игроков могут присоединиться по ключу</li>
-                    <li>Время жизни комнаты - 10 минут</li>
+                    <li>Время жизни комнаты - 5 минут</li>
                     <li>Организатор получает 7% от призового фонда</li>
                   </ul>
                 </div>
@@ -309,7 +309,7 @@ const CreateRoom: React.FC = () => {
             </div>
 
             <p className="text-sm text-center">
-              Комната будет доступна в течение 10 минут. После этого она
+              Комната будет доступна в течение 5 минут. После этого она
               автоматически закроется.
             </p>
           </div>

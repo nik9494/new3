@@ -48,6 +48,7 @@ export function GameRoom() {
   const [showPreCountdown, setShowPreCountdown] = useState(false);
   const [preCountdown, setPreCountdown] = useState(30); // 30 second pre-game countdown
   const tapButtonRef = useRef<HTMLButtonElement>(null);
+  const tapIntervalRef = useRef<number | null>(null);
 
   const { subscribeToChannel, unsubscribeFromChannel, publishToChannel } =
     useRealtime(`room-${roomId || 'default'}`, {
@@ -129,31 +130,54 @@ export function GameRoom() {
     }
   }, [roomId, appUser, isJoined, navigate]);
 
+  // Определяем handleGameEnd до его использования в useEffect
+  const handleGameEnd = async (winner?: Player) => {
+    if (!roomId || !appUser) return;
+
+    try {
+      await fetchData(`/api/games/${roomId}/end`, {
+        method: 'POST',
+        body: JSON.stringify({
+          userId: appUser.id,
+          taps: localTaps,
+        }),
+      });
+    } catch (error) {
+      console.error('Failed to submit final score:', error);
+    }
+  };
+
   // Subscribe to room updates
   useEffect(() => {
     if (roomId && isJoined) {
       const handleRoomUpdate = (update: any) => {
-        setGameState(prev => ({
-          ...prev,
-          ...update,
-        }));
+        setGameState(prevState => {
+          // Handle game state transitions
+          if (update.status === 'finished' && prevState.status !== 'finished') {
+            // Game just finished
+            handleGameEnd(update.winner);
+          } else if (
+            update.status === 'active' &&
+            prevState.status === 'waiting'
+          ) {
+            // Game is starting, show pre-countdown
+            setShowPreCountdown(true);
+            setPreCountdown(30);
+          } else if (update.tiebreaker && !prevState.tiebreaker) {
+            // Tiebreaker initiated
+            return {
+              ...prevState,
+              ...update,
+              status: 'tiebreaker',
+              tiebreaker: update.tiebreaker,
+            };
+          }
 
-        // Handle game state transitions
-        if (update.status === 'finished' && prev.status !== 'finished') {
-          // Game just finished
-          handleGameEnd(update.winner);
-        } else if (update.status === 'active' && prev.status === 'waiting') {
-          // Game is starting, show pre-countdown
-          setShowPreCountdown(true);
-          setPreCountdown(30);
-        } else if (update.tiebreaker && !prev.tiebreaker) {
-          // Tiebreaker initiated
-          setGameState(prev => ({
-            ...prev,
-            status: 'tiebreaker',
-            tiebreaker: update.tiebreaker,
-          }));
-        }
+          return {
+            ...prevState,
+            ...update,
+          };
+        });
       };
 
       subscribeToChannel(`room:${roomId}`, handleRoomUpdate);
@@ -168,6 +192,9 @@ export function GameRoom() {
     subscribeToChannel,
     unsubscribeFromChannel,
     handleGameEnd,
+    appUser,
+    fetchData,
+    localTaps,
   ]);
 
   // Pre-game countdown timer effect (30 seconds)
@@ -227,6 +254,12 @@ export function GameRoom() {
         status: 'finished',
       }));
 
+      // Clear tap interval
+      if (tapIntervalRef.current) {
+        clearInterval(tapIntervalRef.current);
+        tapIntervalRef.current = null;
+      }
+
       // Send final score to server
       sendTapUpdate(localTaps);
     }
@@ -265,9 +298,11 @@ export function GameRoom() {
     const localProgress = Math.min((newTaps / 200) * 100, 100); // 200 taps to win
     updateLocalPlayerProgress(localProgress);
 
-    // Throttle updates to server (send every 5 taps)
-    if (newTaps % 5 === 0) {
-      sendTapUpdate(newTaps);
+    // Set up interval for sending taps if not already set
+    if (!tapIntervalRef.current) {
+      tapIntervalRef.current = window.setInterval(() => {
+        sendTapUpdate(localTaps);
+      }, 50); // Send update every 50ms
     }
   };
 
@@ -294,23 +329,6 @@ export function GameRoom() {
       taps,
       progress: Math.min((taps / 200) * 100, 100), // 200 taps to win
     });
-  };
-
-  // Handle game end
-  const handleGameEnd = async (winner?: Player) => {
-    if (!roomId || !appUser) return;
-
-    try {
-      await fetchData(`/api/games/${roomId}/end`, {
-        method: 'POST',
-        body: JSON.stringify({
-          userId: appUser.id,
-          taps: localTaps,
-        }),
-      });
-    } catch (error) {
-      console.error('Failed to submit final score:', error);
-    }
   };
 
   // Start game function
@@ -350,7 +368,7 @@ export function GameRoom() {
       </div>
 
       {/* Only show start button to room creator */}
-      {user && gameState.players[0]?.id === user.id && (
+      {isCreator && (
         <Button
           onClick={startGame}
           className="bg-[#FFCA28] hover:bg-[#FFB300] text-black"
@@ -362,12 +380,27 @@ export function GameRoom() {
   );
 
   // Render countdown
-  const renderCountdown = () => (
-    <div className="flex flex-col items-center justify-center h-full">
-      <h2 className="text-6xl font-bold mb-4">{gameState.countdown}</h2>
-      <p className="text-xl">Get ready to tap!</p>
-    </div>
-  );
+  const renderCountdown = () => {
+    // Map countdown number to text
+    let countdownText = '';
+    if (gameState.countdown === 3) countdownText = 'На старт';
+    else if (gameState.countdown === 2) countdownText = 'Внимание';
+    else if (gameState.countdown === 1) countdownText = 'TAP';
+
+    return (
+      <div className="flex flex-col items-center justify-center h-full">
+        <motion.div
+          key={gameState.countdown}
+          initial={{ scale: 0.5, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          exit={{ scale: 1.5, opacity: 0 }}
+          className="text-6xl font-bold mb-4"
+        >
+          {countdownText || gameState.countdown}
+        </motion.div>
+      </div>
+    );
+  };
 
   // Render active game
   const renderActiveGame = () => (
