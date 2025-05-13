@@ -27,6 +27,9 @@ import BottomNavigation from '@/components/BottomNavigation';
 import useTelegram from '@/hooks/useTelegram';
 import { roomApi } from '@/services/api';
 
+// Storage key for persisting roomId
+const LOCALSTORAGE_KEY = 'currentHeroRoomId';
+
 const CreateRoom: React.FC = () => {
   const navigate = useNavigate();
   const { user, appUser } = useTelegram();
@@ -40,22 +43,52 @@ const CreateRoom: React.FC = () => {
   // Hero room success dialog
   const [showSuccessDialog, setShowSuccessDialog] = useState<boolean>(false);
   const [createdRoomKey, setCreatedRoomKey] = useState<string>('');
-  const [timeLeft, setTimeLeft] = useState<number>(600); // 10 minutes in seconds
+  const [roomId, setRoomId] = useState<string>('');
+  const [timeLeft, setTimeLeft] = useState<number>(0); // Изначально 0, получим от сервера
+  const [isObserverMode, setIsObserverMode] = useState<boolean>(false);
+
+  // Restore roomId from localStorage on component mount
+  useEffect(() => {
+    const stored = localStorage.getItem(LOCALSTORAGE_KEY);
+    if (stored) {
+      setRoomId(stored);
+    }
+  }, []);
+
+  // Проверяем существующую комнату при монтировании компонента или изменении roomId
+  useEffect(() => {
+    if (roomId) {
+      roomApi.observeRoom(roomId)
+        .then(({ room }) => {
+          setTimeLeft(room.time_left_seconds);
+          setShowSuccessDialog(true);
+          setIsObserverMode(true);
+        })
+        .catch(() => {
+          // комната уже закрыта
+          localStorage.removeItem(LOCALSTORAGE_KEY);
+        });
+    }
+  }, [roomId]);
 
   // Timer effect for room expiration countdown
   useEffect(() => {
-    let timer: number;
-    if (showSuccessDialog && timeLeft > 0) {
-      timer = window.setInterval(() => {
-        setTimeLeft(prev => prev - 1);
-      }, 1000);
-    } else if (timeLeft === 0) {
-      setShowSuccessDialog(false);
-    }
-
-    return () => {
-      if (timer) clearInterval(timer);
-    };
+    if (!showSuccessDialog || timeLeft <= 0) return;
+    
+    const timer = window.setInterval(() => {
+      setTimeLeft(prev => {
+        if (prev <= 1) {
+          clearInterval(timer);
+          localStorage.removeItem(LOCALSTORAGE_KEY);
+          setShowSuccessDialog(false);
+          setIsObserverMode(false);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    
+    return () => clearInterval(timer);
   }, [showSuccessDialog, timeLeft]);
 
   // Format seconds to MM:SS
@@ -66,38 +99,43 @@ const CreateRoom: React.FC = () => {
   };
 
   const handleCreateRoom = async () => {
+    setIsLoading(true);
+    setError('');
     try {
-      setIsLoading(true);
-      setError('');
-
       if (!appUser?.id) {
         throw new Error('Пользователь не авторизован');
       }
-
-      const response = await roomApi.createRoom(appUser.id, 'hero', entryFee);
-
-      if (response && response.room_key) {
-        setCreatedRoomKey(response.room_key);
-        setTimeLeft(300); // 5 minutes
+      
+      const room = await roomApi.createRoom(appUser.id, 'hero', entryFee);
+      setCreatedRoomKey(room.room_key);
+      setRoomId(room.id);
+      localStorage.setItem(LOCALSTORAGE_KEY, room.id);
+      
+      // Сразу запрашиваем оставшееся время у сервера
+      try {
+        const { room: observed } = await roomApi.observeRoom(room.id);
+        setTimeLeft(observed.time_left_seconds);
+        setIsObserverMode(true);
         setShowSuccessDialog(true);
-      } else {
-        // Navigate to the game room
-        navigate(`/game-room/${response.id}`);
+      } catch {
+        // В редком случае сервер может вернуть 410 — комната уже умерла
+        setError('Не удалось получить время жизни комнаты');
+        localStorage.removeItem(LOCALSTORAGE_KEY);
       }
-    } catch (error: any) {
-      console.error('Error creating room:', error);
-
+    } catch (e: any) {
+      console.error('Error creating room:', e);
+      
       // Handle specific error for existing room
       if (
-        error.message &&
-        error.message.includes('уже есть открытая комната')
+        e.message &&
+        e.message.includes('уже есть открытая комната')
       ) {
         setError(
           'У вас уже есть открытая комната. Завершите её или дождитесь окончания.'
         );
       } else {
         setError(
-          error instanceof Error ? error.message : 'Не удалось создать комнату'
+          e instanceof Error ? e.message : 'Не удалось создать комнату'
         );
       }
     } finally {
@@ -112,10 +150,17 @@ const CreateRoom: React.FC = () => {
     }
   };
 
-  const enterCreatedRoom = () => {
-    if (createdRoomKey) {
-      setShowSuccessDialog(false);
-      navigate(`/game-room/${createdRoomKey}`);
+  const enterCreatedRoom = async () => {
+    try {
+      // вызываем только с одним аргументом
+      const { room } = await roomApi.observeRoom(roomId);
+      setTimeLeft(room.time_left_seconds);
+      setIsObserverMode(true);
+      navigate(`/game-room/${roomId}?observer=true`);
+    } catch {
+      // если сервер вернёт 410 или другую ошибку
+      navigate(`/game-room/${roomId}`);
+      localStorage.removeItem(LOCALSTORAGE_KEY);
     }
   };
 
@@ -132,7 +177,7 @@ const CreateRoom: React.FC = () => {
         throw new Error('Пользователь не авторизован');
       }
 
-      const response = await roomApi.joinRoomByKey(roomKey, appUser.id);
+      const response = await roomApi.joinRoomByKey(roomKey);
 
       if (response && response.room) {
         // Navigate to the game room
@@ -167,6 +212,18 @@ const CreateRoom: React.FC = () => {
       }
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleCloseRoom = async () => {
+    try {
+      await roomApi.deleteRoom(roomId);
+      localStorage.removeItem(LOCALSTORAGE_KEY);
+      setShowSuccessDialog(false);
+      setIsObserverMode(false);
+      setRoomId('');
+    } catch (error) {
+      console.error('Error deleting room:', error);
     }
   };
 
@@ -227,13 +284,22 @@ const CreateRoom: React.FC = () => {
                 )}
               </CardContent>
               <CardFooter>
-                <Button
-                  className="w-full"
-                  onClick={handleCreateRoom}
-                  disabled={isLoading}
-                >
-                  {isLoading ? 'Создание...' : 'Создать комнату'}
-                </Button>
+                {roomId && isObserverMode ? (
+                  <Button 
+                    onClick={enterCreatedRoom} 
+                    className="w-full"
+                  >
+                    Войти как организатор
+                  </Button>
+                ) : (
+                  <Button
+                    className="w-full"
+                    onClick={handleCreateRoom}
+                    disabled={isLoading}
+                  >
+                    {isLoading ? 'Создание...' : 'Создать комнату'}
+                  </Button>
+                )}
               </CardFooter>
             </Card>
           </TabsContent>
@@ -282,7 +348,12 @@ const CreateRoom: React.FC = () => {
       </main>
 
       {/* Room Created Success Dialog */}
-      <Dialog open={showSuccessDialog} onOpenChange={setShowSuccessDialog}>
+      <Dialog 
+        open={showSuccessDialog} 
+        onOpenChange={open => {
+          setShowSuccessDialog(open);
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Комната создана!</DialogTitle>
@@ -314,14 +385,34 @@ const CreateRoom: React.FC = () => {
             </p>
           </div>
 
-          <DialogFooter>
-            <Button onClick={enterCreatedRoom} className="w-full">
-              Войти в комнату
+          <DialogFooter className="flex flex-col sm:flex-row gap-2">
+            <Button 
+              variant="destructive" 
+              onClick={handleCloseRoom}
+              className="w-full sm:w-auto"
+            >
+              Закрыть комнату
+            </Button>
+            <Button 
+              onClick={enterCreatedRoom} 
+              className="w-full sm:w-auto"
+            >
+              {isObserverMode ? 'Войти как наблюдатель' : 'Войти в комнату'}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
+      {/* Floating timer button */}
+      {roomId && !showSuccessDialog && (
+        <button 
+          className="fixed bottom-20 right-4 p-2 rounded-full bg-white shadow-lg" 
+          onClick={() => setShowSuccessDialog(true)}
+        >
+          <Clock />
+        </button>
+      )}
+      
       {/* Bottom Navigation */}
       <BottomNavigation />
     </div>

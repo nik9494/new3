@@ -11,6 +11,7 @@ const Leaderboard = lazy(() => import('./pages/Leaderboard'));
 const CreateRoom = lazy(() => import('./pages/CreateRoom'));
 const BonusRoom = lazy(() => import('./components/BonusRoom'));
 
+
 function App() {
   return (
     <ProfileProvider>

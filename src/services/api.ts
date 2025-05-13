@@ -144,6 +144,15 @@ export interface Room {
   created_at?: string;
 }
 
+export interface Participant {
+  id: string;
+  user_id: string;
+  room_id: string;
+  joined_at: string;
+  username: string;
+  photo_url?: string;
+}
+
 export interface Game {
   id: string;
   room_id: string;
@@ -160,6 +169,22 @@ export interface Transaction {
   type: 'entry' | 'payout' | 'fee' | 'referral';
   description?: string;
   created_at?: string;
+}
+
+// Интерфейс для ответа метода observeRoom
+export interface ObserveRoomResponse {
+  room: {
+    id: string;
+    creator_id: string;
+    type: 'hero' | 'standard' | 'bonus';
+    status: 'waiting' | 'active' | 'finished';
+    entry_fee: number;
+    max_players: number;
+    room_key?: string;
+    created_at: string;
+    time_left_seconds: number;
+  };
+  participants: Participant[];
 }
 
 // Base URL configuration
@@ -595,21 +620,12 @@ export const roomApi = {
 
   /**
    * Create a new room
+   * Returns room with room_key
    */
-  createRoom: (
-    creatorId: string,
-    type: 'standard' | 'bonus' | 'hero',
-    entryFee: number,
-    maxPlayers = 10
-  ) =>
-    fetchApiWithoutDebounce<Room>('/rooms', {
+  createRoom: (creatorId: string, type: 'hero', entryFee: number) =>
+    fetchApiWithoutDebounce<Room & { room_key: string }>('/rooms', {
       method: 'POST',
-      body: JSON.stringify({
-        creator_id: creatorId,
-        type,
-        entry_fee: entryFee,
-        max_players: maxPlayers,
-      }),
+      body: JSON.stringify({ type, entry_fee: entryFee }),
     }),
 
   /**
@@ -623,18 +639,38 @@ export const roomApi = {
 
   /**
    * Join a room by its public key
+   * Returns participant and room data
    */
-  joinRoomByKey: (roomKey: string, userId: string) =>
-    fetchApiWithoutDebounce<any>('/rooms/join-by-key', {
-      method: 'POST',
-      body: JSON.stringify({ room_key: roomKey, user_id: userId }),
-    }),
+  joinRoomByKey: (roomKey: string) =>
+    fetchApiWithoutDebounce<{ participant: Participant; room: Room }>(
+      '/rooms/join-by-key',
+      {
+        method: 'POST',
+        body: JSON.stringify({ room_key: roomKey }),
+      }
+    ),
 
   /**
    * Start a game in a room
    */
   startGame: (roomId: string) =>
     fetchApiWithoutDebounce<any>(`/rooms/${roomId}/start`, { method: 'POST' }),
+
+  /**
+   * Организатор заходит в созданную комнату
+   * GET запрос для получения информации о комнате
+   */
+  observeRoom: (roomId: string): Promise<ObserveRoomResponse> =>
+    fetchApiWithoutDebounce<ObserveRoomResponse>(
+      `/rooms/${roomId}/observe`,
+      { method: 'GET' }
+    ),
+
+  /**
+   * Delete a room by its ID
+   */
+  deleteRoom: (roomId: string) =>
+    fetchApiWithoutDebounce<any>(`/rooms/${roomId}`, { method: 'DELETE' }),
 };
 
 // Game API endpoints
