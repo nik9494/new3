@@ -7,7 +7,6 @@ import { useApiRequest } from '../hooks/useApiRequest';
 import { useTelegram } from '../hooks/useTelegram';
 import { standardApi, heroApi } from '../services/api';
 import BottomNavigation from './BottomNavigation';
-import UserHeader from './UserHeader';
 import { motion } from 'framer-motion';
 
 interface Player {
@@ -80,122 +79,71 @@ export function GameRoom() {
       roomKey: room.room_key,
       entryFee: room.entry_fee,
     }));
+
+    localStorage.setItem(LOCALSTORAGE_KEY_ROOM_TYPE, room.type);
   };
 
   // Join room effect
   useEffect(() => {
-    if (roomId && appUser?.id && !isJoined) {
-      // Если пришли как наблюдатель
-      const urlParams = new URLSearchParams(window.location.search);
-      const isObserver = urlParams.get('observer') === 'true';
+    if (!roomId || !appUser?.id || isJoined) return;
 
-      if (isObserver) {
-        // Просто подгружаем текущее состояние комнаты без join/create
-        (async () => {
-          try {
-            // Определяем тип комнаты
-            const roomType = localStorage.getItem(LOCALSTORAGE_KEY_ROOM_TYPE);
-            let room, participants;
-            if (roomType === 'hero') {
-              ({ room, participants } = await heroApi.observe(roomId));
-            } else {
-              const roomInfo = await standardApi.get(roomId);
-              room = roomInfo;
-              participants = roomInfo.participants;
-            }
+    const isKeyFormat = roomId.length === 6;
+    const urlParams = new URLSearchParams(window.location.search);
+    const isObserver = urlParams.get('observer') === 'true';
+
+    // Первый вход по ключу
+    if (isKeyFormat && !isObserver) {
+      (async () => {
+        try {
+          const { room, participant } = await heroApi.joinByKey(roomId);
+          initializeRoom(room, [participant]);
+          setIsJoined(true);
+          setIsCreator(room.creator_id === appUser.id);
+          navigate(`/game-room/${room.id}`, { replace: true });
+        } catch {
+          navigate('/');
+        }
+      })();
+      return;
+    }
+
+    // Если наблюдатель
+    if (isObserver) {
+      (async () => {
+        try {
+          const roomType = localStorage.getItem(LOCALSTORAGE_KEY_ROOM_TYPE);
+          if (roomType === 'hero') {
+            const { room, participants } = await heroApi.observe(roomId);
             initializeRoom(room, participants);
             setIsJoined(true);
-            setIsCreator(true);
-
-            // Подключаемся к каналу для реального времени
-            subscribeToChannel('update', handleRoomUpdate);
-          } catch (err) {
-            console.error('Не удалось загрузить комнату как наблюдатель:', err);
-            navigate('/');
-          }
-        })();
-        return () => {
-          unsubscribeFromChannel('update');
-        };
-      }
-
-      const joinRoom = async () => {
-        try {
-          // Check if this is a room key (6 characters) or a room ID (UUID)
-          const isRoomKey = roomId.length === 6;
-
-          let response;
-          if (isRoomKey) {
-            // для ключей — героические комнаты
-            response = await heroApi.joinByKey(roomId);
-            if (response && response.room) {
-              // Redirect to the actual room ID URL
-              navigate(`/game-room/${response.room.id}`, { replace: true });
-              return;
-            }
+            setIsCreator(room.creator_id === appUser.id);
           } else {
-            // для UUID — стандартные комнаты
-            const joinResult = await standardApi.joinOrCreate(gameState.entryFee || 0);
-            const theRoomId = joinResult.roomId;
-
-            // Получаем полную информацию о комнате
-            const roomInfo = await standardApi.get(theRoomId);
-
-            // Маппим участников в наших игроков
-            const mappedPlayers: Player[] = roomInfo.participants.map(p => ({
-              id: p.user_id,
-              username: p.username,
-              avatar: p.photo_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${p.user_id}`,
-              taps: 0,
-              progress: 0,
-            }));
-
-            // Обновляем состояние
-            setGameState(prev => ({
-              ...prev,
-              players: mappedPlayers,
-              status: roomInfo.status,
-              roomType: roomInfo.type,
-              roomKey: roomInfo.room_key,
-              entryFee: roomInfo.entry_fee,
-            }));
+            const info = await standardApi.get(roomId);
+            initializeRoom(info, info.participants);
             setIsJoined(true);
-            setIsCreator(roomInfo.creator_id === appUser.id);
-
-            // Сохраняем тип комнаты
-            localStorage.setItem(LOCALSTORAGE_KEY_ROOM_TYPE, roomInfo.type);
+            setIsCreator(info.creator_id === appUser.id);
           }
-        } catch (error: any) {
-          console.error('Failed to join room:', error);
-
-          // Handle specific errors
-          if (
-            error.message &&
-            error.message.includes('Организатор не запустил игру')
-          ) {
-            alert(
-              'Организатор не запустил игру вовремя. Свяжитесь с организатором или введите другой ключ.'
-            );
-            navigate('/');
-          } else if (
-            error.message &&
-            error.message.includes('Insufficient balance')
-          ) {
-            alert('Недостаточно Stars для входа в комнату. Пополните баланс.');
-            navigate('/');
-          } else {
-            alert(
-              'Не удалось войти в комнату: ' +
-                (error.message || 'Неизвестная ошибка')
-            );
-            navigate('/');
-          }
+        } catch {
+          navigate('/');
         }
-      };
-
-      joinRoom();
+      })();
+      return;
     }
-  }, [roomId, appUser, isJoined, navigate, gameState.entryFee]);
+
+    // Стандартный join/create
+    (async () => {
+      try {
+        const { roomId: newId } = await standardApi.joinOrCreate(gameState.entryFee || 0);
+        const info = await standardApi.get(newId);
+        initializeRoom(info, info.participants);
+        setIsJoined(true);
+        setIsCreator(info.creator_id === appUser.id);
+      } catch {
+        alert('Не удалось войти');
+        navigate('/');
+      }
+    })();
+  }, [roomId, appUser, isJoined]);
 
   // Определяем handleGameEnd до его использования в useEffect
   const handleGameEnd = async (winner?: Player) => {
@@ -254,16 +202,7 @@ export function GameRoom() {
         unsubscribeFromChannel('update');
       };
     }
-  }, [
-    roomId,
-    isJoined,
-    subscribeToChannel,
-    unsubscribeFromChannel,
-    handleGameEnd,
-    appUser,
-    fetchData,
-    localTaps,
-  ]);
+  }, [roomId, isJoined, subscribeToChannel, unsubscribeFromChannel, handleGameEnd, appUser, fetchData, localTaps]);
 
   // Pre-game countdown timer effect (30 seconds)
   useEffect(() => {
@@ -401,17 +340,16 @@ export function GameRoom() {
 
   // Start game function
   const startGame = async () => {
-    if (!roomId || !appUser || !gameState.roomKey) {
-      console.error('Cannot start game: missing roomKey');
-      return;
-    }
-
+    if (!roomId || !appUser) return;
     try {
-      // Передаём оба обязательных параметра: ID комнаты и secretKey (room_key)
-      await standardApi.startGame(roomId, gameState.roomKey);
+      if (gameState.roomType === 'hero') {
+        await heroApi.startGame(roomId, gameState.roomKey!);
+      } else {
+        await standardApi.startGame(roomId, gameState.roomKey!);
+      }
       setGameState(prev => ({ ...prev, status: 'countdown' }));
-    } catch (error) {
-      console.error('Failed to start game:', error);
+    } catch (e) {
+      console.error(e);
     }
   };
 
@@ -604,7 +542,6 @@ export function GameRoom() {
 
   return (
     <div className="flex flex-col h-screen bg-[#1E88E5] text-white">
-      <UserHeader />
       <div className="flex-1 overflow-y-auto">{renderGameContent()}</div>
       <BottomNavigation />
     </div>
@@ -613,3 +550,4 @@ export function GameRoom() {
 
 // Add default export for the component
 export default GameRoom;
+

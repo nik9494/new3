@@ -5,6 +5,25 @@ import { verifyJWT } from '../middleware/auth.js';
 export default function standardRoomsRoutes(pool) {
   const router = express.Router();
 
+  // Функция для генерации уникального ключа комнаты
+  async function generateUniqueRoomKey(client) {
+    const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    let roomKey, isUnique = false;
+
+    while (!isUnique) {
+      roomKey = Array.from({ length: 6 })
+        .map(() => characters.charAt(Math.floor(Math.random() * characters.length)))
+        .join('');
+      const { rows } = await client.query(
+        `SELECT COUNT(*) FROM rooms WHERE room_key = $1`,
+        [roomKey]
+      );
+      isUnique = parseInt(rows[0].count, 10) === 0;
+    }
+
+    return roomKey;
+  }
+
   // Получение списка всех доступных стандартных комнат
   router.get('/', async (req, res) => {
     const client = await pool.connect();
@@ -46,20 +65,20 @@ export default function standardRoomsRoutes(pool) {
     try {
       await client.query('BEGIN');
       const { roomId } = req.params;
-      
+
       const roomResult = await client.query(`
         SELECT *
         FROM rooms r
         WHERE r.id = $1 AND r.type = 'standard'
       `, [roomId]);
-      
+
       if (roomResult.rows.length === 0) {
         await client.query('ROLLBACK');
         return res.status(404).json({ message: 'Комната не найдена' });
       }
-      
+
       const room = roomResult.rows[0];
-      
+
       // получаем участников
       const participantsResult = await client.query(`
         SELECT
@@ -70,7 +89,7 @@ export default function standardRoomsRoutes(pool) {
         WHERE p.room_id = $1
         ORDER BY p.joined_at ASC
       `, [roomId]);
-      
+
       await client.query('COMMIT');
       return res.json({
         ...room,
@@ -117,16 +136,16 @@ export default function standardRoomsRoutes(pool) {
 
       // Проверяем, есть ли уже комната с этим игроком
       const existingParticipation = await client.query(`
-        SELECT r.id 
-        FROM rooms r 
-        JOIN participants p ON r.id = p.room_id 
+        SELECT r.id
+        FROM rooms r
+        JOIN participants p ON r.id = p.room_id
         WHERE p.user_id = $1 AND r.status IN ('waiting', 'active') AND r.type = 'standard'
       `, [user_id]);
 
       if (existingParticipation.rows.length > 0) {
         await client.query('ROLLBACK');
-        return res.status(400).json({ 
-          message: 'Вы уже участвуете в другой комнате. Завершите игру или дождитесь её окончания.' 
+        return res.status(400).json({
+          message: 'Вы уже участвуете в другой комнате. Завершите игру или дождитесь её окончания.'
         });
       }
 
@@ -153,11 +172,15 @@ export default function standardRoomsRoutes(pool) {
         roomId = uuidv4();
         isNewRoom = true;
 
+        // Генерируем уникальный ключ для стандартной комнаты
+        const roomKey = await generateUniqueRoomKey(client);
+
         await client.query(
-          `INSERT INTO rooms (id, type, entry_fee, max_players, status, created_at)
-           VALUES ($1, $2, $3, $4, $5, NOW())
+          `INSERT INTO rooms
+             (id, creator_id, type, entry_fee, max_players, status, room_key, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
            RETURNING *`,
-          [roomId, 'standard', roomFee, max_players, 'waiting']
+          [roomId, user_id, 'standard', roomFee, max_players, 'waiting', roomKey]
         );
       }
 
@@ -186,7 +209,7 @@ export default function standardRoomsRoutes(pool) {
       );
 
       let gameStarting = false;
-      
+
       // Если комната заполнена, автоматически запускаем предварительный таймер
       if (parseInt(newParticipantCount.rows[0].count) >= max_players) {
         // Обновляем статус комнаты
@@ -194,16 +217,16 @@ export default function standardRoomsRoutes(pool) {
           'preparation',
           roomId
         ]);
-        
+
         gameStarting = true;
-        
+
         // Здесь будет логика для запуска таймера
         // В реальном приложении это будет обрабатываться асинхронно
         // например, через систему заданий или WebSocket
       }
 
       await client.query('COMMIT');
-      
+
       if (isNewRoom) {
         res.status(201).json({
           message: 'Создана новая комната и вы успешно присоединились',
@@ -273,7 +296,7 @@ export default function standardRoomsRoutes(pool) {
           FROM participants p
           WHERE p.room_id = $2 AND u.id = p.user_id
         `, [room.entry_fee, roomId]);
-        
+
         // Записываем транзакции возврата
         await client.query(`
           INSERT INTO transactions (id, user_id, amount, type, description)
@@ -286,15 +309,15 @@ export default function standardRoomsRoutes(pool) {
           FROM participants p
           WHERE p.room_id = $2
         `, [room.entry_fee, roomId]);
-        
+
         await client.query('UPDATE rooms SET status = $1 WHERE id = $2', [
           'canceled',
           roomId
         ]);
-        
+
         await client.query('COMMIT');
-        return res.status(200).json({ 
-          message: 'Комната отменена из-за недостаточного числа игроков. Средства возвращены участникам.' 
+        return res.status(200).json({
+          message: 'Комната отменена из-за недостаточного числа игроков. Средства возвращены участникам.'
         });
       }
 
@@ -470,7 +493,7 @@ export default function standardRoomsRoutes(pool) {
         FROM participants p
         WHERE p.room_id = $2 AND u.id = p.user_id
       `, [room.entry_fee, roomId]);
-      
+
       // Записываем транзакции возврата
       await client.query(`
         INSERT INTO transactions (id, user_id, amount, type, description)
@@ -483,7 +506,7 @@ export default function standardRoomsRoutes(pool) {
         FROM participants p
         WHERE p.room_id = $2
       `, [room.entry_fee, roomId, error_type]);
-      
+
       // Обновляем статус комнаты
       await client.query('UPDATE rooms SET status = $1, error_message = $2 WHERE id = $3', [
         'error',
@@ -530,8 +553,8 @@ export default function standardRoomsRoutes(pool) {
 
       if (room.status !== 'waiting') {
         await client.query('ROLLBACK');
-        return res.status(400).json({ 
-          message: 'Выход возможен только из комнаты в состоянии ожидания' 
+        return res.status(400).json({
+          message: 'Выход возможен только из комнаты в состоянии ожидания'
         });
       }
 
@@ -587,10 +610,10 @@ export default function standardRoomsRoutes(pool) {
     const client = await pool.connect();
     try {
       const { roomId } = req.params;
-      
+
       const roomResult = await client.query(`
-        SELECT 
-          r.id, r.status, r.entry_fee, r.max_players, 
+        SELECT
+          r.id, r.status, r.entry_fee, r.max_players,
           r.preparation_started_at, r.game_started_at, r.finished_at,
           COUNT(p.id) as player_count
         FROM rooms r
@@ -598,17 +621,17 @@ export default function standardRoomsRoutes(pool) {
         WHERE r.id = $1 AND r.type = 'standard'
         GROUP BY r.id
       `, [roomId]);
-      
+
       if (roomResult.rows.length === 0) {
         return res.status(404).json({ message: 'Комната не найдена' });
       }
-      
+
       const room = roomResult.rows[0];
-      
+
       // Вычисляем оставшееся время подготовки или игры
       let remainingTime = null;
       let phase = null;
-      
+
       if (room.status === 'preparation' && room.preparation_started_at) {
         const preparationTime = 30; // 30 секунд на подготовку
         const prepStartedAt = new Date(room.preparation_started_at);
@@ -622,7 +645,7 @@ export default function standardRoomsRoutes(pool) {
         remainingTime = Math.max(0, gameTime - elapsed);
         phase = 'game';
       }
-      
+
       res.json({
         ...room,
         remainingTime,

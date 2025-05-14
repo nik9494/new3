@@ -1,10 +1,30 @@
-// roomsCommonService.js
-// Сервис для общих операций с комнатами (standard и hero)
-
 import { v4 as uuidv4 } from 'uuid';
 
 export default function roomsService(pool, config) {
   const { type, maxPlayers, organizerShare = 0 } = config;
+
+  // Генерация уникального ключа комнаты
+  async function generateUniqueRoomKey(client) {
+    const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    let roomKey;
+    let isUnique = false;
+
+    while (!isUnique) {
+      roomKey = Array.from({ length: 6 })
+        .map(() => characters.charAt(Math.floor(Math.random() * characters.length)))
+        .join('');
+
+      // Проверка уникальности ключа
+      const { rows } = await client.query(
+        `SELECT COUNT(*) FROM rooms WHERE room_key = $1`,
+        [roomKey]
+      );
+
+      isUnique = parseInt(rows[0].count, 10) === 0;
+    }
+
+    return roomKey;
+  }
 
   async function refundParticipants(client, roomId, entryFee) {
     await client.query(
@@ -38,14 +58,31 @@ export default function roomsService(pool, config) {
     return rows.length;
   }
 
-  async function create(client, creatorId, entryFee) {
+  // Для стандартных комнат
+  async function createStandard(client, creatorId, entryFee) {
     const roomId = uuidv4();
+    const roomKey = await generateUniqueRoomKey(client); // Генерация ключа
     await client.query(
-      `INSERT INTO rooms (id, creator_id, type, entry_fee, max_players, status, created_at)
-       VALUES ($1, $2, $3, $4, $5, 'waiting', NOW())`,
-      [roomId, creatorId, type, entryFee, maxPlayers]
+      `INSERT INTO rooms
+       (id, creator_id, type, entry_fee, max_players, status, room_key, created_at)
+       VALUES ($1, $2, 'standard', $3, $4, 'waiting', $5, NOW())`,
+      [roomId, creatorId, entryFee, maxPlayers, roomKey]
     );
-    return roomId;
+    return { roomId, roomKey }; // Возвращаем ключ вместе с ID
+  }
+
+  // Для Hero-комнат
+  async function createHero(client, creatorId, entryFee) {
+    const roomId = uuidv4();
+    // Генерация ключа (6 символов)
+    const roomKey = await generateUniqueRoomKey(client);
+    await client.query(
+      `INSERT INTO rooms
+       (id, creator_id, type, entry_fee, max_players, status, room_key, created_at)
+       VALUES ($1, $2, 'hero', $3, $4, 'waiting', $5, NOW())`,
+      [roomId, creatorId, entryFee, maxPlayers, roomKey]
+    );
+    return { roomId, roomKey };
   }
 
   async function join(client, roomId, userId, entryFee) {
@@ -100,25 +137,13 @@ export default function roomsService(pool, config) {
 
   return {
     refundParticipants,
-    cleanupExpired: cleanupExpired,
-    create,
+    cleanupExpired,
+    createStandard,  // Заменено create на createStandard
+    createHero,      // Добавлен метод createHero
     join,
-    joinByKey, // Добавлено
+    joinByKey,
     start,
     finish,
   };
 }
 
-// heroService.js
-export default function heroService(pool) {
-  const commonService = roomsService(pool, { type: 'hero', maxPlayers: 10, organizerShare: 0.1 });
-
-  async function join(client, roomKey, userId, entryFee) {
-    return commonService.joinByKey(client, roomKey, userId, entryFee);
-  }
-
-  return {
-    ...commonService,
-    join,
-  };
-}

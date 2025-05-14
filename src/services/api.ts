@@ -652,10 +652,20 @@ export const heroApi = {
     fetchApiWithoutDebounce<ObserveRoomResponse>(`/rooms/hero/${id}`, {
       method: 'GET',
     }),
+  /** Создать новую Hero-комнату. Возвращает объект с id и room_key */
   create: (entryFee: number) =>
-    fetchApiWithoutDebounce<Room & { room_key: string }>(`/rooms/hero`, {
+    fetchApiWithoutDebounce<{
+      id: string;
+      room_key: string;
+      creator_id: string;
+      type: 'hero';
+      entry_fee: number;
+      max_players: number;
+      status: 'waiting' | 'active' | 'finished';
+      created_at?: string;
+    }>(`/rooms/hero`, {
       method: 'POST',
-      body: JSON.stringify({ type: 'hero', entry_fee: entryFee }),
+      body: JSON.stringify({ entry_fee: entryFee }),
     }),
   joinByKey: (key: string) =>
     fetchApiWithoutDebounce<{ participant: Participant; room: Room }>(

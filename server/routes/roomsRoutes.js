@@ -11,6 +11,52 @@ export default function roomsRoutes(pool) {
 
   const router = express.Router();
 
+  // История всех комнат (должна идти ДО любых '/:roomId' маршрутов)
+  router.get('/history', verifyJWT(), async (req, res) => {
+    const client = await pool.connect();
+    try {
+      const userId = req.user.id;
+      const { page = 1, limit = 10 } = req.query;
+      const offset = (page - 1) * limit;
+      const roomsQuery = `
+        SELECT
+          r.*,
+          u_creator.username AS creator_username,
+          u_winner.username AS winner_username,
+          (SELECT COUNT(*) FROM participants WHERE room_id = r.id) AS participant_count
+        FROM rooms r
+        LEFT JOIN users u_creator ON r.creator_id = u_creator.id
+        LEFT JOIN users u_winner ON r.winner_id = u_winner.id
+        WHERE r.status = 'finished'
+          AND (r.creator_id = $1 OR EXISTS (
+            SELECT 1 FROM participants WHERE room_id = r.id AND user_id = $1
+          ))
+        ORDER BY r.finished_at DESC
+        LIMIT $2 OFFSET $3
+      `;
+      const roomsResult = await client.query(roomsQuery, [userId, limit, offset]);
+      const countResult = await client.query(`
+        SELECT COUNT(*) AS total
+        FROM rooms
+        WHERE status = 'finished'
+          AND (creator_id = $1 OR EXISTS (
+            SELECT 1 FROM participants WHERE room_id = rooms.id AND user_id = $1
+          ))
+      `, [userId]);
+      res.json({
+        rooms: roomsResult.rows,
+        pagination: {
+          total: parseInt(countResult.rows[0].total),
+          page: parseInt(page),
+          limit: parseInt(limit),
+          pages: Math.ceil(parseInt(countResult.rows[0].total) / limit)
+        }
+      });
+    } catch (e) {
+      res.status(500).json({ message: e.message });
+    } finally { client.release(); }
+  });
+
   // --- Standard Rooms ---
   const standard = express.Router();
 
@@ -35,16 +81,32 @@ export default function roomsRoutes(pool) {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
-      const id = req.user.id;
-      const { entry_fee } = req.body;
-      let roomId;
-      try {
-        roomId = await standardService.join(client, existingRoomId, id, entry_fee);
-      } catch {
-        roomId = await standardService.create(client, id, entry_fee);
+      const userId = req.user.id;
+      const entryFee = req.body.entry_fee;
+
+      // создаём или находим комнату (теперь возвращается и ключ)
+      let roomData;
+      const existing = await client.query(
+        `SELECT id, room_key FROM rooms
+         WHERE creator_id = $1 AND type='standard' AND status='waiting'`,
+        [userId]
+      );
+      if (existing.rows.length) {
+        roomData = { roomId: existing.rows[0].id, roomKey: existing.rows[0].room_key };
+      } else {
+        roomData = await standardService.createStandard(client, userId, entryFee);
       }
+
+      // Добавляем пользователя как участника
+      await standardService.join(client, roomData.roomId, userId, entryFee);
+
+      // Получаем количество игроков в комнате
+      const { rows: [{ player_count }] } = await client.query(
+        `SELECT COUNT(*)::int AS player_count FROM participants WHERE room_id=$1`, [roomData.roomId]
+      );
+
       await client.query('COMMIT');
-      res.json({ roomId });
+      res.json({ roomId: roomData.roomId, player_count });
     } catch (e) {
       await client.query('ROLLBACK');
       res.status(400).json({ error: e.message });
@@ -87,9 +149,9 @@ export default function roomsRoutes(pool) {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
-      const roomId = await heroService.create(client, req.user.id, req.body.entry_fee);
+      const { roomId, roomKey } = await heroService.createHero(client, req.user.id, req.body.entry_fee);
       await client.query('COMMIT');
-      res.status(201).json({ roomId });
+      res.status(201).json({ id: roomId, room_key: roomKey });
     } catch (e) {
       await client.query('ROLLBACK');
       res.status(400).json({ error: e.message });
@@ -101,14 +163,59 @@ export default function roomsRoutes(pool) {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
-      const { participant } = await heroService.joinByKey(
+      await heroService.validateRoomStatus(client, req.body.room_key);
+      const { participant, room } = await heroService.joinByKey(
         client,
         req.body.room_key,
         req.user.id,
         req.body.entry_fee
       );
+
+      // собрать всех участников сразу с photo_url
+      const participants = await client.query(`
+        SELECT u.id, u.username, u.photo_url, p.joined_at
+        FROM participants p
+        JOIN users u ON p.user_id = u.id
+        WHERE p.room_id = $1
+        ORDER BY p.joined_at ASC
+      `, [room.id]);
+
       await client.query('COMMIT');
-      res.json(participant);
+      res.json({
+        participant,
+        room,
+        participants: participants.rows
+      });
+    } catch (e) {
+      await client.query('ROLLBACK');
+      res.status(400).json({ error: e.message });
+    } finally { client.release(); }
+  });
+
+  // Observe
+  hero.get('/:roomId/observe', verifyJWT(), async (req, res) => {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await heroService.validateRoomStatus(client, req.params.roomId);
+
+      const room = await client.query(`
+        SELECT * FROM rooms WHERE id = $1
+      `, [req.params.roomId]);
+
+      const participants = await client.query(`
+        SELECT u.id, u.username, u.photo_url, p.joined_at
+        FROM participants p
+        JOIN users u ON p.user_id = u.id
+        WHERE p.room_id = $1
+        ORDER BY p.joined_at ASC
+      `, [req.params.roomId]);
+
+      await client.query('COMMIT');
+      res.json({
+        room: room.rows[0],
+        participants: participants.rows
+      });
     } catch (e) {
       await client.query('ROLLBACK');
       res.status(400).json({ error: e.message });
@@ -148,37 +255,4 @@ export default function roomsRoutes(pool) {
   router.use('/hero', hero);
 
   return router;
-}
-
-// roomsCommonService.js
-export default function roomsService(pool, config) {
-  // ... existing code ...
-
-  async function joinByKey(client, roomKey, userId, entryFee) {
-    const roomRes = await client.query(
-      `SELECT id, entry_fee FROM rooms WHERE room_key = $1 AND status='waiting'`,
-      [roomKey]
-    );
-
-    if (roomRes.rows.length === 0) {
-      throw new Error('Room not found or not available');
-    }
-
-    const room = roomRes.rows[0];
-    if (room.entry_fee !== entryFee) {
-      throw new Error('Entry fee does not match');
-    }
-
-    return this.join(client, room.id, userId, entryFee);
-  }
-
-  return {
-    refundParticipants,
-    cleanupExpired: cleanupExpired,
-    create,
-    join,
-    joinByKey, // Add the new method to the returned object
-    start,
-    finish,
-  };
 }

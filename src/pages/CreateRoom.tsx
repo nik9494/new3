@@ -27,30 +27,29 @@ import BottomNavigation from '@/components/BottomNavigation';
 import useTelegram from '@/hooks/useTelegram';
 import { heroApi } from '@/services/api';
 
-// Storage keys for persisting data
+// Ключи для хранения данных
 const LOCALSTORAGE_KEY_ROOM_ID = 'currentHeroRoomId';
 const LOCALSTORAGE_KEY_ROOM_KEY = 'currentHeroRoomKey';
 const LOCALSTORAGE_KEY_CREATED_AT = 'currentHeroRoomCreatedAt';
-const LOCALSTORAGE_KEY_ROOM_TYPE = 'currentRoomType'; // Новый ключ для типа комнаты
+const LOCALSTORAGE_KEY_ROOM_TYPE = 'currentRoomType';
 
 const CreateRoom: React.FC = () => {
   const navigate = useNavigate();
-  const { user, appUser } = useTelegram();
+  const { appUser } = useTelegram();
   const [activeTab, setActiveTab] = useState<'create' | 'join'>('create');
   const [entryFee, setEntryFee] = useState<number>(50);
-  const [maxPlayers, setMaxPlayers] = useState<number>(10);
   const [roomKey, setRoomKey] = useState<string>('');
   const [error, setError] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
 
-  // Hero room success dialog
+  // Состояния для Hero комнаты
   const [showSuccessDialog, setShowSuccessDialog] = useState<boolean>(false);
   const [createdRoomKey, setCreatedRoomKey] = useState<string>('');
   const [roomId, setRoomId] = useState<string>('');
   const [timeLeft, setTimeLeft] = useState<number>(0);
   const [isObserverMode, setIsObserverMode] = useState<boolean>(false);
 
-  // Функция для расчета оставшегося времени на основе метки создания комнаты
+  // Расчет оставшегося времени комнаты
   const calculateTimeLeft = (): number => {
     const createdAtStr = localStorage.getItem(LOCALSTORAGE_KEY_CREATED_AT);
     if (!createdAtStr) return 0;
@@ -61,7 +60,7 @@ const CreateRoom: React.FC = () => {
     return remaining;
   };
 
-  // Restore data from localStorage on component mount
+  // Восстановление данных при загрузке компонента
   useEffect(() => {
     const storedRoomId = localStorage.getItem(LOCALSTORAGE_KEY_ROOM_ID);
     const storedRoomKey = localStorage.getItem(LOCALSTORAGE_KEY_ROOM_KEY);
@@ -74,20 +73,18 @@ const CreateRoom: React.FC = () => {
       setCreatedRoomKey(storedRoomKey);
     }
 
-    // Инициализируем таймер при монтировании компонента
-    const initialTimeLeft = calculateTimeLeft();
-    setTimeLeft(initialTimeLeft);
+    // Инициализация таймера
+    setTimeLeft(calculateTimeLeft());
   }, []);
 
-  // Проверяем существующую комнату при монтировании компонента или изменении roomId
+  // Проверка существующей комнаты
   useEffect(() => {
     if (roomId) {
       heroApi.observe(roomId)
         .then(({ room }) => {
-          // Обновляем состояние с данными с сервера
           setIsObserverMode(true);
 
-          // Если время создания не сохранено, сохраняем его на основе времени от сервера
+          // Сохраняем время создания комнаты, если оно не сохранено
           if (!localStorage.getItem(LOCALSTORAGE_KEY_CREATED_AT)) {
             const currentTime = Date.now();
             const createdAt = currentTime - (300 - room.time_left_seconds) * 1000;
@@ -97,15 +94,14 @@ const CreateRoom: React.FC = () => {
           setTimeLeft(calculateTimeLeft());
         })
         .catch(() => {
-          // комната уже закрыта, очищаем все данные
+          // Комната уже закрыта, очищаем данные
           clearRoomData();
         });
     }
   }, [roomId]);
 
-  // Глобальный таймер для отсчета времени, не зависящий от состояния модального окна
+  // Таймер обратного отсчета
   useEffect(() => {
-    // Запускаем таймер только если есть активная комната
     if (!roomId) return;
 
     const timer = window.setInterval(() => {
@@ -123,24 +119,25 @@ const CreateRoom: React.FC = () => {
     return () => clearInterval(timer);
   }, [roomId]);
 
-  // Функция очистки данных комнаты
+  // Очистка данных комнаты
   const clearRoomData = () => {
     localStorage.removeItem(LOCALSTORAGE_KEY_ROOM_ID);
     localStorage.removeItem(LOCALSTORAGE_KEY_ROOM_KEY);
-    localStorage.removeItem(LOCALSTORAGE_KEY_ROOM_TYPE); // Удаляем тип комнаты
+    localStorage.removeItem(LOCALSTORAGE_KEY_ROOM_TYPE);
     localStorage.removeItem(LOCALSTORAGE_KEY_CREATED_AT);
     setRoomId('');
     setCreatedRoomKey('');
     setIsObserverMode(false);
   };
 
-  // Format seconds to MM:SS
+  // Форматирование времени в MM:SS
   const formatTime = (seconds: number): string => {
     const minutes = Math.floor(seconds / 60);
     const secs = seconds % 60;
     return `${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
+  // Создание комнаты
   const handleCreateRoom = async () => {
     setIsLoading(true);
     setError('');
@@ -151,46 +148,38 @@ const CreateRoom: React.FC = () => {
 
       const room = await heroApi.create(entryFee);
 
-      // Сохраняем все данные комнаты в localStorage
+      // Сохраняем данные комнаты
       setCreatedRoomKey(room.room_key);
       setRoomId(room.id);
       localStorage.setItem(LOCALSTORAGE_KEY_ROOM_ID, room.id);
       localStorage.setItem(LOCALSTORAGE_KEY_ROOM_KEY, room.room_key);
-      localStorage.setItem(LOCALSTORAGE_KEY_ROOM_TYPE, 'hero'); // Сохраняем тип комнаты
+      localStorage.setItem(LOCALSTORAGE_KEY_ROOM_TYPE, 'hero');
       localStorage.setItem(LOCALSTORAGE_KEY_CREATED_AT, Date.now().toString());
 
-      // Сразу запрашиваем оставшееся время у сервера
+      // Запрашиваем информацию о комнате
       try {
         const { room: observed } = await heroApi.observe(room.id);
         setTimeLeft(calculateTimeLeft());
         setIsObserverMode(true);
         setShowSuccessDialog(true);
       } catch {
-        // В редком случае сервер может вернуть 410 — комната уже умерла
         setError('Не удалось получить время жизни комнаты');
         clearRoomData();
       }
     } catch (e: any) {
-      console.error('Error creating room:', e);
+      console.error('Ошибка при создании комнаты:', e);
 
-      // Handle specific error for existing room
-      if (
-        e.message &&
-        e.message.includes('уже есть открытая комната')
-      ) {
-        setError(
-          'У вас уже есть открытая комната. Завершите её или дождитесь окончания.'
-        );
+      if (e.message && e.message.includes('уже есть открытая комната')) {
+        setError('У вас уже есть открытая комната. Завершите её или дождитесь окончания.');
       } else {
-        setError(
-          e instanceof Error ? e.message : 'Не удалось создать комнату'
-        );
+        setError(e instanceof Error ? e.message : 'Не удалось создать комнату');
       }
     } finally {
       setIsLoading(false);
     }
   };
 
+  // Копирование ключа комнаты
   const copyRoomKey = () => {
     if (createdRoomKey) {
       navigator.clipboard.writeText(createdRoomKey);
@@ -198,20 +187,20 @@ const CreateRoom: React.FC = () => {
     }
   };
 
+  // Вход в созданную комнату
   const enterCreatedRoom = async () => {
     try {
-      // вызываем только с одним аргументом
       const { room } = await heroApi.observe(roomId);
       setTimeLeft(calculateTimeLeft());
       setIsObserverMode(true);
       navigate(`/game-room/${roomId}?observer=true`);
     } catch {
-      // если сервер вернёт 410 или другую ошибку
       navigate(`/game-room/${roomId}`);
       clearRoomData();
     }
   };
 
+  // Вход в комнату по ключу
   const handleJoinRoom = async () => {
     try {
       setIsLoading(true);
@@ -228,54 +217,43 @@ const CreateRoom: React.FC = () => {
       const response = await heroApi.joinByKey(roomKey);
 
       if (response && response.room) {
-        // Navigate to the game room
         navigate(`/game-room/${response.room.id}`);
       } else {
         throw new Error('Не удалось войти в комнату');
       }
     } catch (error: any) {
-      console.error('Error joining room:', error);
+      console.error('Ошибка при входе в комнату:', error);
 
-      // Handle specific errors
-      if (
-        error.message &&
-        error.message.includes('Организатор не запустил игру')
-      ) {
-        setError(
-          'Организатор не запустил игру вовремя. Свяжитесь с организатором или введите другой ключ.'
-        );
-      } else if (
-        error.message &&
-        error.message.includes('Insufficient balance')
-      ) {
+      if (error.message && error.message.includes('Организатор не запустил игру')) {
+        setError('Организатор не запустил игру вовремя. Свяжитесь с организатором или введите другой ключ.');
+      } else if (error.message && error.message.includes('Insufficient balance')) {
         setError('Недостаточно Stars для входа в комнату. Пополните баланс.');
       } else if (error.message && error.message.includes('Room is full')) {
         setError('Комната уже заполнена.');
       } else if (error.message && error.message.includes('Room not found')) {
         setError('Комната не найдена. Проверьте ключ и попробуйте снова.');
       } else {
-        setError(
-          error instanceof Error ? error.message : 'Не удалось войти в комнату'
-        );
+        setError(error instanceof Error ? error.message : 'Не удалось войти в комнату');
       }
     } finally {
       setIsLoading(false);
     }
   };
 
+  // Закрытие комнаты
   const handleCloseRoom = async () => {
     try {
       await heroApi.delete(roomId);
       clearRoomData();
       setShowSuccessDialog(false);
     } catch (error) {
-      console.error('Error deleting room:', error);
+      console.error('Ошибка при закрытии комнаты:', error);
     }
   };
 
   return (
     <div className="flex flex-col min-h-screen bg-[#FFCA28]">
-      {/* Main Content */}
+      {/* Основной контент */}
       <main className="flex-1 p-4 pb-20">
         <h1 className="text-2xl font-bold mb-4 text-center">Hero Комнаты</h1>
 
@@ -393,7 +371,7 @@ const CreateRoom: React.FC = () => {
         </Tabs>
       </main>
 
-      {/* Room Created Success Dialog */}
+      {/* Диалог успешного создания комнаты */}
       <Dialog
         open={showSuccessDialog}
         onOpenChange={open => {
@@ -449,7 +427,7 @@ const CreateRoom: React.FC = () => {
         </DialogContent>
       </Dialog>
 
-      {/* Floating timer button */}
+      {/* Плавающая кнопка таймера */}
       {roomId && !showSuccessDialog && timeLeft > 0 && (
         <button
           className="fixed bottom-20 right-4 p-2 rounded-full bg-white shadow-lg flex items-center justify-center"
@@ -460,7 +438,7 @@ const CreateRoom: React.FC = () => {
         </button>
       )}
 
-      {/* Bottom Navigation */}
+      {/* Нижняя навигация */}
       <BottomNavigation />
     </div>
   );
