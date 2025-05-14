@@ -48,7 +48,7 @@ const PORT = process.env.PORT || 3001;
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const MINI_APP_URL =
   process.env.MINI_APP_URL ||
-  'https://barrier-theorem-brass-roommate.trycloudflare.com';
+  'https://donations-bay-mag-cc.trycloudflare.com';
 
 // Database connection
 const { Pool } = pg;
@@ -141,13 +141,14 @@ app.set('trust proxy', [
 
 // Parse Mini App URL for CORS configuration
 const allowedOrigins = [
-  'https://barrier-theorem-brass-roommate.trycloudflare.com',
+  'https://donations-bay-mag-cc.trycloudflare.com',
   'https://web.telegram.org',
   'https://telegram.org',
 ];
 
 // Initialize Socket.IO
 const io = new Server(server, {
+  path: '/socket.io',
   cors: {
     origin: (origin, callback) => {
       if (

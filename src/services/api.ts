@@ -1,3 +1,5 @@
+
+
 /**
  * API Service for TapBattle Backend
  *
@@ -649,7 +651,7 @@ export const heroApi = {
   list: () =>
     fetchApi<Array<Room & { player_count: number; room_key?: string }>>(`/rooms/hero`),
   get: (id: string) =>
-    fetchApiWithoutDebounce<ObserveRoomResponse>(`/rooms/hero/${id}`, {
+    fetchApiWithoutDebounce<ObserveRoomResponse>(`/rooms/hero/${id}/observe`, {
       method: 'GET',
     }),
   /** Создать новую Hero-комнату. Возвращает объект с id и room_key */
@@ -680,6 +682,11 @@ export const heroApi = {
   delete: (roomId: string) =>
     fetchApiWithoutDebounce<any>(`/rooms/hero/${roomId}`, {
       method: 'DELETE',
+    }),
+  startGame: (roomId: string, secretKey: string) =>
+    fetchApiWithoutDebounce<any>(`/rooms/hero/${roomId}/start-game`, {
+      method: 'POST',
+      body: JSON.stringify({ secret_key: secretKey }),
     }),
 };
 

@@ -29,10 +29,13 @@ export function useRealtime<T>(
 
   // Initialize socket and join channel
   useEffect(() => {
-    const socket = io(import.meta.env.VITE_API_URL || 'http://localhost:3001', {
+    const socket = io(window.location.origin, {
+      path: '/socket.io',
       transports: ['websocket'],
-      reconnectionAttempts: 5,
+      reconnection: true,
+      reconnectionAttempts: Infinity,
       reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
     });
     socketRef.current = socket;
 
@@ -57,6 +60,9 @@ export function useRealtime<T>(
     });
 
     return () => {
+      Object.keys(handlersRef.current).forEach(event =>
+        socketRef.current?.off(event, handlersRef.current[event])
+      );
       socket.disconnect();
     };
   }, [channel, options]);

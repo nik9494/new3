@@ -3,7 +3,6 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react-swc';
 import { tempo } from 'tempo-devtools/dist/vite';
 
-// https://vitejs.dev/config/
 export default defineConfig({
   base:
     process.env.NODE_ENV === 'development'
@@ -23,11 +22,12 @@ export default defineConfig({
     // @ts-ignore
     allowedHosts: true,
     proxy: {
+      // REST API proxy (no WebSocket)
       '/api': {
         target: 'http://localhost:3001',
         changeOrigin: true,
         secure: false,
-        ws: true,
+        ws: false,
         configure: (proxy, _options) => {
           proxy.on('error', (err, _req, _res) => {
             console.log('Ошибка прокси:', err);
@@ -44,6 +44,29 @@ export default defineConfig({
           });
         },
       },
+      // Socket.IO WebSocket proxy
+      '/socket.io': {
+        target: 'ws://localhost:3001',
+        changeOrigin: true,
+        secure: false,
+        ws: true,
+        configure: (proxy, _options) => {
+          proxy.on('error', (err, _req, _res) => {
+            console.log('Socket.IO proxy error:', err);
+          });
+          proxy.on('proxyReq', (proxyReq, req, _res) => {
+            console.log('Socket.IO proxyReq:', req.url);
+          });
+        },
+      },
+      // If your Socket.IO server is mounted under /api/socket.io, uncomment:
+      // '/api/socket.io': {
+      //   target: 'ws://localhost:3001',
+      //   changeOrigin: true,
+      //   secure: false,
+      //   ws: true,
+      // },
     },
   },
 });
+

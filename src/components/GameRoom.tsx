@@ -13,6 +13,7 @@ interface Player {
   id: string;
   username: string;
   avatar: string;
+  photo_url?: string;
   taps: number;
   progress: number;
 }
@@ -49,6 +50,7 @@ export function GameRoom() {
   const [isCreator, setIsCreator] = useState(false);
   const [showPreCountdown, setShowPreCountdown] = useState(false);
   const [preCountdown, setPreCountdown] = useState(30); // 30 second pre-game countdown
+  const [showStartButton, setShowStartButton] = useState(false);
   const tapButtonRef = useRef<HTMLButtonElement>(null);
   const tapIntervalRef = useRef<number | null>(null);
 
@@ -87,62 +89,61 @@ export function GameRoom() {
   useEffect(() => {
     if (!roomId || !appUser?.id || isJoined) return;
 
-    const isKeyFormat = roomId.length === 6;
     const urlParams = new URLSearchParams(window.location.search);
     const isObserver = urlParams.get('observer') === 'true';
+    const isKeyFormat = roomId.length === 6;
+    const storedType = localStorage.getItem(LOCALSTORAGE_KEY_ROOM_TYPE);
 
-    // Первый вход по ключу
+    // 1) Если зашли по ключу — joinByKey
     if (isKeyFormat && !isObserver) {
-      (async () => {
-        try {
-          const { room, participant } = await heroApi.joinByKey(roomId);
+      heroApi.joinByKey(roomId)
+        .then(({ room, participant }) => {
           initializeRoom(room, [participant]);
-          setIsJoined(true);
           setIsCreator(room.creator_id === appUser.id);
-          navigate(`/game-room/${room.id}`, { replace: true });
-        } catch {
-          navigate('/');
-        }
-      })();
+          setIsJoined(true);
+          localStorage.setItem(LOCALSTORAGE_KEY_ROOM_TYPE, 'hero');
+          navigate(`/game-room/${room.id}?observer=true`, { replace: true });
+        })
+        .catch(() => navigate('/'));
       return;
     }
 
-    // Если наблюдатель
+    // 2) Если уже была hero-комната (например при перезагрузке)
+    if (storedType === 'hero') {
+      heroApi.get(roomId)
+        .then((res) => {
+          initializeRoom(res.room, res.participants);
+          setIsCreator(res.room.creator_id === appUser.id);
+          setIsJoined(true);
+        })
+        .catch(() => navigate('/'));
+      return;
+    }
+
+    // 3) Наблюдатель (observer=true)
     if (isObserver) {
-      (async () => {
-        try {
-          const roomType = localStorage.getItem(LOCALSTORAGE_KEY_ROOM_TYPE);
-          if (roomType === 'hero') {
-            const { room, participants } = await heroApi.observe(roomId);
-            initializeRoom(room, participants);
-            setIsJoined(true);
-            setIsCreator(room.creator_id === appUser.id);
-          } else {
-            const info = await standardApi.get(roomId);
-            initializeRoom(info, info.participants);
-            setIsJoined(true);
-            setIsCreator(info.creator_id === appUser.id);
-          }
-        } catch {
-          navigate('/');
-        }
-      })();
+      heroApi.observe(roomId)
+        .then(({ room, participants }) => {
+          initializeRoom(room, participants);
+          setIsCreator(room.creator_id === appUser.id);
+          setIsJoined(true);
+        })
+        .catch(() => navigate('/'));
       return;
     }
 
-    // Стандартный join/create
-    (async () => {
-      try {
-        const { roomId: newId } = await standardApi.joinOrCreate(gameState.entryFee || 0);
-        const info = await standardApi.get(newId);
+    // 4) Стандартная комната
+    standardApi.joinOrCreate(gameState.entryFee || 0)
+      .then(({ roomId: newId }) => standardApi.get(newId))
+      .then(info => {
         initializeRoom(info, info.participants);
-        setIsJoined(true);
         setIsCreator(info.creator_id === appUser.id);
-      } catch {
+        setIsJoined(true);
+      })
+      .catch(() => {
         alert('Не удалось войти');
         navigate('/');
-      }
-    })();
+      });
   }, [roomId, appUser, isJoined]);
 
   // Определяем handleGameEnd до его использования в useEffect
@@ -353,6 +354,11 @@ export function GameRoom() {
     }
   };
 
+  // Show start button logic
+  useEffect(() => {
+    setShowStartButton(isCreator && gameState.players.length > 1);
+  }, [isCreator, gameState.players.length]);
+
   // Render waiting room
   const renderWaitingRoom = () => (
     <div className="flex flex-col items-center justify-center h-full p-4">
@@ -375,7 +381,7 @@ export function GameRoom() {
       </div>
 
       {/* Only show start button to room creator */}
-      {isCreator && (
+      {showStartButton && (
         <Button
           onClick={startGame}
           className="bg-[#FFCA28] hover:bg-[#FFB300] text-black"
@@ -550,4 +556,3 @@ export function GameRoom() {
 
 // Add default export for the component
 export default GameRoom;
-
