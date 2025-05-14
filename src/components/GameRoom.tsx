@@ -5,7 +5,7 @@ import { Progress } from './ui/progress';
 import { useRealtime } from '../hooks/useRealtime';
 import { useApiRequest } from '../hooks/useApiRequest';
 import { useTelegram } from '../hooks/useTelegram';
-import { roomApi } from '../services/api';
+import { standardApi, heroApi } from '../services/api';
 import BottomNavigation from './BottomNavigation';
 import UserHeader from './UserHeader';
 import { motion } from 'framer-motion';
@@ -33,6 +33,9 @@ interface GameState {
   };
 }
 
+// Storage keys for persisting data
+const LOCALSTORAGE_KEY_ROOM_TYPE = 'currentRoomType';
+
 export function GameRoom() {
   const navigate = useNavigate();
   const { roomId } = useParams<{ roomId: string }>();
@@ -59,9 +62,63 @@ export function GameRoom() {
   const { fetchData } = useApiRequest();
   const { user, appUser } = useTelegram();
 
+  // Initialize room state
+  const initializeRoom = (room: any, participants: any[]) => {
+    const mappedPlayers: Player[] = participants.map(p => ({
+      id: p.user_id,
+      username: p.username,
+      avatar: p.photo_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${p.user_id}`,
+      taps: 0,
+      progress: 0,
+    }));
+
+    setGameState(prev => ({
+      ...prev,
+      players: mappedPlayers,
+      status: room.status,
+      roomType: room.type,
+      roomKey: room.room_key,
+      entryFee: room.entry_fee,
+    }));
+  };
+
   // Join room effect
   useEffect(() => {
     if (roomId && appUser?.id && !isJoined) {
+      // Если пришли как наблюдатель
+      const urlParams = new URLSearchParams(window.location.search);
+      const isObserver = urlParams.get('observer') === 'true';
+
+      if (isObserver) {
+        // Просто подгружаем текущее состояние комнаты без join/create
+        (async () => {
+          try {
+            // Определяем тип комнаты
+            const roomType = localStorage.getItem(LOCALSTORAGE_KEY_ROOM_TYPE);
+            let room, participants;
+            if (roomType === 'hero') {
+              ({ room, participants } = await heroApi.observe(roomId));
+            } else {
+              const roomInfo = await standardApi.get(roomId);
+              room = roomInfo;
+              participants = roomInfo.participants;
+            }
+            initializeRoom(room, participants);
+            setIsJoined(true);
+            setIsCreator(true);
+
+            // Подключаемся к каналу для реального времени
+            subscribeToChannel('update', handleRoomUpdate);
+          } catch (err) {
+            console.error('Не удалось загрузить комнату как наблюдатель:', err);
+            navigate('/');
+          }
+        })();
+        return () => {
+          unsubscribeFromChannel('update');
+        };
+      }
+
       const joinRoom = async () => {
         try {
           // Check if this is a room key (6 characters) or a room ID (UUID)
@@ -69,34 +126,44 @@ export function GameRoom() {
 
           let response;
           if (isRoomKey) {
-            response = await roomApi.joinRoomByKey(roomId, appUser.id);
+            // для ключей — героические комнаты
+            response = await heroApi.joinByKey(roomId);
             if (response && response.room) {
               // Redirect to the actual room ID URL
               navigate(`/game-room/${response.room.id}`, { replace: true });
               return;
             }
           } else {
-            response = await roomApi.joinRoom(roomId, appUser.id);
-          }
+            // для UUID — стандартные комнаты
+            const joinResult = await standardApi.joinOrCreate(gameState.entryFee || 0);
+            const theRoomId = joinResult.roomId;
 
-          if (response) {
-            setIsJoined(true);
+            // Получаем полную информацию о комнате
+            const roomInfo = await standardApi.get(theRoomId);
 
-            // Check if user is the creator
-            const room = response.room || {};
-            if (room.creator_id === appUser.id) {
-              setIsCreator(true);
-            }
+            // Маппим участников в наших игроков
+            const mappedPlayers: Player[] = roomInfo.participants.map(p => ({
+              id: p.user_id,
+              username: p.username,
+              avatar: p.photo_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${p.user_id}`,
+              taps: 0,
+              progress: 0,
+            }));
 
-            // Initialize with current room state
+            // Обновляем состояние
             setGameState(prev => ({
               ...prev,
-              players: response.participants || [],
-              status: room.status || 'waiting',
-              roomType: room.type,
-              roomKey: room.room_key,
-              entryFee: room.entry_fee,
+              players: mappedPlayers,
+              status: roomInfo.status,
+              roomType: roomInfo.type,
+              roomKey: roomInfo.room_key,
+              entryFee: roomInfo.entry_fee,
             }));
+            setIsJoined(true);
+            setIsCreator(roomInfo.creator_id === appUser.id);
+
+            // Сохраняем тип комнаты
+            localStorage.setItem(LOCALSTORAGE_KEY_ROOM_TYPE, roomInfo.type);
           }
         } catch (error: any) {
           console.error('Failed to join room:', error);
@@ -128,7 +195,7 @@ export function GameRoom() {
 
       joinRoom();
     }
-  }, [roomId, appUser, isJoined, navigate]);
+  }, [roomId, appUser, isJoined, navigate, gameState.entryFee]);
 
   // Определяем handleGameEnd до его использования в useEffect
   const handleGameEnd = async (winner?: Player) => {
@@ -147,43 +214,44 @@ export function GameRoom() {
     }
   };
 
+  // Обработчик обновлений комнаты
+  const handleRoomUpdate = (update: any) => {
+    setGameState(prevState => {
+      // Handle game state transitions
+      if (update.status === 'finished' && prevState.status !== 'finished') {
+        // Game just finished
+        handleGameEnd(update.winner);
+      } else if (
+        update.status === 'active' &&
+        prevState.status === 'waiting'
+      ) {
+        // Game is starting, show pre-countdown
+        setShowPreCountdown(true);
+        setPreCountdown(30);
+      } else if (update.tiebreaker && !prevState.tiebreaker) {
+        // Tiebreaker initiated
+        return {
+          ...prevState,
+          ...update,
+          status: 'tiebreaker',
+          tiebreaker: update.tiebreaker,
+        };
+      }
+
+      return {
+        ...prevState,
+        ...update,
+      };
+    });
+  };
+
   // Subscribe to room updates
   useEffect(() => {
     if (roomId && isJoined) {
-      const handleRoomUpdate = (update: any) => {
-        setGameState(prevState => {
-          // Handle game state transitions
-          if (update.status === 'finished' && prevState.status !== 'finished') {
-            // Game just finished
-            handleGameEnd(update.winner);
-          } else if (
-            update.status === 'active' &&
-            prevState.status === 'waiting'
-          ) {
-            // Game is starting, show pre-countdown
-            setShowPreCountdown(true);
-            setPreCountdown(30);
-          } else if (update.tiebreaker && !prevState.tiebreaker) {
-            // Tiebreaker initiated
-            return {
-              ...prevState,
-              ...update,
-              status: 'tiebreaker',
-              tiebreaker: update.tiebreaker,
-            };
-          }
-
-          return {
-            ...prevState,
-            ...update,
-          };
-        });
-      };
-
-      subscribeToChannel(`room:${roomId}`, handleRoomUpdate);
+      subscribeToChannel('update', handleRoomUpdate);
 
       return () => {
-        unsubscribeFromChannel(`room:${roomId}`);
+        unsubscribeFromChannel('update');
       };
     }
   }, [
@@ -333,14 +401,15 @@ export function GameRoom() {
 
   // Start game function
   const startGame = async () => {
-    if (!roomId || !appUser) return;
+    if (!roomId || !appUser || !gameState.roomKey) {
+      console.error('Cannot start game: missing roomKey');
+      return;
+    }
 
     try {
-      await roomApi.startGame(roomId);
-      setGameState(prev => ({
-        ...prev,
-        status: 'countdown',
-      }));
+      // Передаём оба обязательных параметра: ID комнаты и secretKey (room_key)
+      await standardApi.startGame(roomId, gameState.roomKey);
+      setGameState(prev => ({ ...prev, status: 'countdown' }));
     } catch (error) {
       console.error('Failed to start game:', error);
     }

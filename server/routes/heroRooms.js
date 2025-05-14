@@ -2,7 +2,7 @@ import express from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { verifyJWT } from '../middleware/auth.js';
 
-export default function roomsRoutes(pool) {
+export default function heroRoomsRoutes(pool) {
   const router = express.Router();
 
   // Генерирует и проверяет уникальность ключа комнаты
@@ -135,10 +135,10 @@ export default function roomsRoutes(pool) {
       }
     }
 
-    if (room.status !== 'waiting') {
+    if (room.status !== 'waiting' && room.status !== 'active') {
       return {
         isValid: false,
-        message: 'Комната не находится в статусе ожидания',
+        message: 'Комната не находится в подходящем статусе',
         statusCode: 400
       };
     }
@@ -146,49 +146,26 @@ export default function roomsRoutes(pool) {
     return { isValid: true, room };
   }
 
-  // Получение списка всех доступных комнат
-  router.get('/', async (req, res) => {
+  // Получение списка Hero-комнат
+  router.get('/', verifyJWT(), async (req, res) => {
     const client = await pool.connect();
     try {
-      await client.query('BEGIN');
+      const userId = req.user.id;
 
-      // Сначала очищаем просроченные комнаты
-      await cleanupExpiredRooms(client);
-
-      // Получаем активные комнаты с количеством игроков
-      const result = await client.query(`
-        SELECT
+      const { rows } = await client.query(
+        `SELECT
           r.*,
-          COUNT(p.id) as player_count,
-          EXTRACT(EPOCH FROM (NOW() - r.created_at)) as age_seconds
-        FROM
-          rooms r
-        LEFT JOIN
-          participants p ON r.id = p.room_id
-        WHERE
-          r.status = 'waiting'
-        GROUP BY
-          r.id
-        ORDER BY
-          r.type DESC, r.entry_fee ASC
-      `);
+          COUNT(p.id) AS player_count,
+          CASE WHEN r.creator_id = $1 THEN r.room_key ELSE NULL END AS room_key
+        FROM rooms r
+        LEFT JOIN participants p ON p.room_id = r.id
+        WHERE r.type = 'hero' AND r.status = 'waiting'
+        GROUP BY r.id`,
+        [userId]
+      );
 
-      // Добавляем информацию об оставшемся времени для Hero-комнат
-      const roomsWithTimeLeft = result.rows.map(room => {
-        if (room.type === 'hero') {
-          const timeLeftSeconds = Math.max(0, 300 - room.age_seconds);
-          return {
-            ...room,
-            time_left_seconds: Math.floor(timeLeftSeconds)
-          };
-        }
-        return room;
-      });
-
-      await client.query('COMMIT');
-      res.json(roomsWithTimeLeft);
+      res.json(rows);
     } catch (error) {
-      await client.query('ROLLBACK');
       console.error('Ошибка при получении списка комнат:', error);
       res.status(500).json({ message: 'Ошибка сервера', error: error.message });
     } finally {
@@ -196,55 +173,7 @@ export default function roomsRoutes(pool) {
     }
   });
 
-  // Получение информации о конкретной комнате с участниками
-  router.get('/:roomId', async (req, res) => {
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      const { roomId } = req.params;
-      // Сразу извлекаем возраст комнаты в секундах
-      const roomResult = await client.query(`
-        SELECT
-          r.*,
-          EXTRACT(EPOCH FROM (NOW() - r.created_at)) AS age_seconds
-        FROM rooms r
-        WHERE r.id = $1
-      `, [roomId]);
-      if (roomResult.rows.length === 0) {
-        await client.query('ROLLBACK');
-        return res.status(404).json({ message: 'Комната не найдена' });
-      }
-      const room = roomResult.rows[0];
-      // считаем оставшееся время, если Hero+waiting
-      const timeLeftSeconds = (room.type === 'hero' && room.status === 'waiting')
-        ? Math.max(0, 300 - Math.floor(room.age_seconds))
-        : null;
-      // получаем участников
-      const participantsResult = await client.query(`
-        SELECT
-          p.id, p.joined_at,
-          u.id AS user_id, u.username, u.telegram_id
-        FROM participants p
-        JOIN users u ON p.user_id = u.id
-        WHERE p.room_id = $1
-        ORDER BY p.joined_at ASC
-      `, [roomId]);
-      await client.query('COMMIT');
-      return res.json({
-        ...room,
-        time_left_seconds: timeLeftSeconds,
-        participants: participantsResult.rows,
-      });
-    } catch (err) {
-      await client.query('ROLLBACK');
-      console.error(err);
-      res.status(500).json({ message: 'Ошибка сервера' });
-    } finally {
-      client.release();
-    }
-  });
-
-  // Создание новой комнаты
+  // Создание новой Hero-комнаты
   router.post('/', verifyJWT(), async (req, res) => {
     const client = await pool.connect();
 
@@ -252,28 +181,26 @@ export default function roomsRoutes(pool) {
       await client.query('BEGIN');
 
       const creator_id = req.user.id;
-      const { type, entry_fee, max_players = 10 } = req.body;
+      const { entry_fee } = req.body;
 
-      if (!type || entry_fee === undefined) {
+      if (entry_fee === undefined) {
         await client.query('ROLLBACK');
         return res.status(400).json({
-          message: 'Необходимо указать type и entry_fee'
+          message: 'Необходимо указать entry_fee'
         });
       }
 
-      if (type === 'hero') {
-        const existingRoomCheck = await client.query(
-          'SELECT * FROM rooms WHERE creator_id = $1 AND status = $2',
-          [creator_id, 'waiting']
-        );
+      const existingRoomCheck = await client.query(
+        'SELECT * FROM rooms WHERE creator_id = $1 AND status IN ($2, $3)',
+        [creator_id, 'waiting', 'active']
+      );
 
-        if (existingRoomCheck.rows.length > 0) {
-          await client.query('ROLLBACK');
-          return res.status(409).json({
-            message: 'У вас уже есть открытая комната',
-            room: existingRoomCheck.rows[0]
-          });
-        }
+      if (existingRoomCheck.rows.length > 0) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({
+          message: 'У вас уже есть открытая комната',
+          room: existingRoomCheck.rows[0]
+        });
       }
 
       const userCheck = await client.query(
@@ -286,42 +213,15 @@ export default function roomsRoutes(pool) {
         return res.status(404).json({ message: 'Пользователь не найден' });
       }
 
-      const userBalance = parseFloat(userCheck.rows[0].balance_stars);
-      const roomFee = parseFloat(entry_fee);
-
-      if (userBalance < roomFee) {
-        await client.query('ROLLBACK');
-        return res.status(400).json({ message: 'Недостаточно средств' });
-      }
-
       const roomId = uuidv4();
-      const roomKey = type === 'hero' ? await generateUniqueRoomKey(client) : null;
-      const actualMaxPlayers = type === 'hero' ? 30 : max_players;
+      const roomKey = await generateUniqueRoomKey(client);
 
-      // Добавляем EXTRACT(EPOCH FROM (NOW() - created_at)) AS age_seconds в RETURNING
       const roomResult = await client.query(
         `INSERT INTO rooms (id, creator_id, type, entry_fee, max_players, status, room_key, created_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
          RETURNING *, EXTRACT(EPOCH FROM (NOW() - created_at)) AS age_seconds`,
-        [roomId, creator_id, type, roomFee, actualMaxPlayers, 'waiting', roomKey]
+        [roomId, creator_id, 'hero', entry_fee, 30, 'waiting', roomKey]
       );
-
-      await client.query(
-        'UPDATE users SET balance_stars = balance_stars - $1 WHERE id = $2',
-        [roomFee, creator_id]
-      );
-
-      await client.query(
-        'INSERT INTO transactions (id, user_id, amount, type, description) VALUES ($1, $2, $3, $4, $5)',
-        [uuidv4(), creator_id, roomFee, 'entry', `Взнос за ${type === 'hero' ? 'Hero' : 'обычную'} комнату ${roomId}`]
-      );
-
-      if (type !== 'hero') {
-        await client.query(
-          'INSERT INTO participants (id, room_id, user_id) VALUES ($1, $2, $3)',
-          [uuidv4(), roomId, creator_id]
-        );
-      }
 
       await client.query('COMMIT');
 
@@ -339,113 +239,6 @@ export default function roomsRoutes(pool) {
     } catch (error) {
       await client.query('ROLLBACK');
       console.error('Ошибка при создании комнаты:', error);
-      res.status(500).json({ message: 'Ошибка сервера', error: error.message });
-    } finally {
-      client.release();
-    }
-  });
-
-  // Присоединение к комнате по ID (для обычных комнат)
-  router.post('/:roomId/join', verifyJWT(), async (req, res) => {
-    const client = await pool.connect();
-
-    try {
-      await client.query('BEGIN');
-
-      const { roomId } = req.params;
-      const user_id = req.user.id;
-
-      // Проверяем статус комнаты
-      const { isValid, message, statusCode, room } = await validateRoomStatus(client, roomId);
-
-      if (!isValid) {
-        await client.query('ROLLBACK');
-        return res.status(statusCode).json({ message });
-      }
-
-      const userCheck = await client.query(
-        'SELECT balance_stars FROM users WHERE id = $1',
-        [user_id]
-      );
-
-      if (userCheck.rows.length === 0) {
-        await client.query('ROLLBACK');
-        return res.status(404).json({ message: 'Пользователь не найден' });
-      }
-
-      const userBalance = parseFloat(userCheck.rows[0].balance_stars);
-      const roomFee = parseFloat(room.entry_fee);
-
-      if (userBalance < roomFee) {
-        await client.query('ROLLBACK');
-        return res.status(400).json({ message: 'Недостаточно средств' });
-      }
-
-      const participantCheck = await client.query(
-        'SELECT * FROM participants WHERE room_id = $1 AND user_id = $2',
-        [roomId, user_id]
-      );
-
-      if (participantCheck.rows.length > 0) {
-        await client.query('ROLLBACK');
-        return res.status(400).json({ message: 'Вы уже присоединились к этой комнате' });
-      }
-
-      const participantCount = await client.query(
-        'SELECT COUNT(*) FROM participants WHERE room_id = $1',
-        [roomId]
-      );
-
-      if (parseInt(participantCount.rows[0].count) >= room.max_players) {
-        await client.query('ROLLBACK');
-        return res.status(400).json({ message: 'Комната заполнена' });
-      }
-
-      await client.query(
-        'UPDATE users SET balance_stars = balance_stars - $1 WHERE id = $2',
-        [roomFee, user_id]
-      );
-
-      await client.query(
-        'INSERT INTO transactions (id, user_id, amount, type, description) VALUES ($1, $2, $3, $4, $5)',
-        [
-          uuidv4(),
-          user_id,
-          roomFee,
-          'entry',
-          `Взнос за ${room.type === 'hero' ? 'Hero' : 'обычную'} комнату ${roomId}`
-        ]
-      );
-
-      const participantResult = await client.query(
-        'INSERT INTO participants (id, room_id, user_id) VALUES ($1, $2, $3) RETURNING *',
-        [uuidv4(), roomId, user_id]
-      );
-
-      if (room.type !== 'hero') {
-        const newParticipantCount = await client.query(
-          'SELECT COUNT(*) FROM participants WHERE room_id = $1',
-          [roomId]
-        );
-
-        if (parseInt(newParticipantCount.rows[0].count) >= room.max_players) {
-          await client.query('UPDATE rooms SET status = $1 WHERE id = $2', [
-            'active',
-            roomId
-          ]);
-
-          await client.query(
-            'INSERT INTO games (id, room_id, start_time) VALUES ($1, $2, NOW())',
-            [uuidv4(), roomId]
-          );
-        }
-      }
-
-      await client.query('COMMIT');
-      res.status(201).json(participantResult.rows[0]);
-    } catch (error) {
-      await client.query('ROLLBACK');
-      console.error('Ошибка при присоединении к комнате:', error);
       res.status(500).json({ message: 'Ошибка сервера', error: error.message });
     } finally {
       client.release();
@@ -507,6 +300,12 @@ export default function roomsRoutes(pool) {
         return res.status(404).json({ message: 'Пользователь не найден' });
       }
 
+      // Проверяем, не является ли пользователь создателем комнаты
+      if (room.creator_id === user_id) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ message: 'Организатор не может присоединиться к своей комнате как участник' });
+      }
+
       const userBalance = parseFloat(userCheck.rows[0].balance_stars);
       const roomFee = parseFloat(room.entry_fee);
 
@@ -545,7 +344,7 @@ export default function roomsRoutes(pool) {
         [
           uuidv4(),
           user_id,
-          roomFee,
+          -roomFee,
           'entry',
           `Взнос за Hero-комнату ${room.id}`
         ]
@@ -577,7 +376,7 @@ export default function roomsRoutes(pool) {
     }
   });
 
-  // Запуск игры в комнате (только для создателя комнаты)
+  // Запуск игры (только организатор)
   router.post('/:roomId/start', verifyJWT(), async (req, res) => {
     const client = await pool.connect();
 
@@ -587,41 +386,179 @@ export default function roomsRoutes(pool) {
       const { roomId } = req.params;
       const userId = req.user.id;
 
-      // Проверяем статус комнаты
-      const { isValid, message, statusCode, room } = await validateRoomStatus(client, roomId);
+      const roomResult = await client.query(
+        'SELECT * FROM rooms WHERE id = $1',
+        [roomId]
+      );
 
-      if (!isValid) {
+      if (roomResult.rows.length === 0) {
         await client.query('ROLLBACK');
-        return res.status(statusCode).json({ message });
+        return res.status(404).json({ message: 'Комната не найдена' });
       }
+
+      const room = roomResult.rows[0];
 
       if (room.creator_id !== userId) {
         await client.query('ROLLBACK');
-        return res.status(403).json({
-          message: 'Только создатель комнаты может запустить игру'
-        });
+        return res.status(403).json({ message: 'Только организатор может запустить игру' });
       }
 
-      await client.query('UPDATE rooms SET status = $1 WHERE id = $2', [
-        'active',
-        roomId
-      ]);
+      if (room.status !== 'waiting') {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ message: 'Игра уже запущена или завершена' });
+      }
 
-      const gameId = uuidv4();
+      // Проверяем наличие участников
+      const participantsCount = await client.query(
+        'SELECT COUNT(*) FROM participants WHERE room_id = $1',
+        [roomId]
+      );
+
+      if (parseInt(participantsCount.rows[0].count) === 0) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ message: 'Нельзя запустить игру без участников' });
+      }
+
+      // Меняем статус комнаты на active
       await client.query(
-        'INSERT INTO games (id, room_id, start_time) VALUES ($1, $2, NOW())',
-        [gameId, roomId]
+        'UPDATE rooms SET status = $1, started_at = NOW() WHERE id = $2',
+        ['active', roomId]
       );
 
       await client.query('COMMIT');
+
       res.json({
         message: 'Игра успешно запущена',
-        gameId: gameId,
-        roomId: roomId
+        room_id: roomId
       });
+
     } catch (error) {
       await client.query('ROLLBACK');
       console.error('Ошибка при запуске игры:', error);
+      res.status(500).json({ message: 'Ошибка сервера', error: error.message });
+    } finally {
+      client.release();
+    }
+  });
+
+  // Завершение игры и выплата призов
+  router.post('/:roomId/finish', verifyJWT(), async (req, res) => {
+    const client = await pool.connect();
+
+    try {
+      await client.query('BEGIN');
+
+      const { roomId } = req.params;
+      const { winner_id } = req.body;
+      const userId = req.user.id;
+
+      if (!winner_id) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ message: 'Необходимо указать winner_id' });
+      }
+
+      const roomResult = await client.query(
+        'SELECT * FROM rooms WHERE id = $1',
+        [roomId]
+      );
+
+      if (roomResult.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ message: 'Комната не найдена' });
+      }
+
+      const room = roomResult.rows[0];
+
+      if (room.creator_id !== userId) {
+        await client.query('ROLLBACK');
+        return res.status(403).json({ message: 'Только организатор может завершить игру' });
+      }
+
+      if (room.status !== 'active') {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ message: 'Игра не находится в активном состоянии' });
+      }
+
+      // Проверяем, что победитель является участником комнаты
+      const winnerCheck = await client.query(
+        'SELECT * FROM participants WHERE room_id = $1 AND user_id = $2',
+        [roomId, winner_id]
+      );
+
+      if (winnerCheck.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ message: 'Указанный победитель не является участником комнаты' });
+      }
+
+      // Считаем общую сумму взносов
+      const participantsCount = await client.query(
+        'SELECT COUNT(*) FROM participants WHERE room_id = $1',
+        [roomId]
+      );
+
+      const totalParticipants = parseInt(participantsCount.rows[0].count);
+      const totalPrize = totalParticipants * parseFloat(room.entry_fee);
+
+      // Распределяем призы: 95% победителю, 5% организатору
+      const winnerPrize = totalPrize * 0.95;
+      const organizerFee = totalPrize * 0.05;
+
+      // Начисляем призы
+      await client.query(
+        'UPDATE users SET balance_stars = balance_stars + $1 WHERE id = $2',
+        [winnerPrize, winner_id]
+      );
+
+      await client.query(
+        'UPDATE users SET balance_stars = balance_stars + $1 WHERE id = $2',
+        [organizerFee, room.creator_id]
+      );
+
+      // Записываем транзакции
+      await client.query(
+        'INSERT INTO transactions (id, user_id, amount, type, description) VALUES ($1, $2, $3, $4, $5)',
+        [
+          uuidv4(),
+          winner_id,
+          winnerPrize,
+          'prize',
+          `Выигрыш в Hero-комнате ${roomId} (95% от банка)`
+        ]
+      );
+
+      await client.query(
+        'INSERT INTO transactions (id, user_id, amount, type, description) VALUES ($1, $2, $3, $4, $5)',
+        [
+          uuidv4(),
+          room.creator_id,
+          organizerFee,
+          'fee',
+          `Комиссия организатора Hero-комнаты ${roomId} (5% от банка)`
+        ]
+      );
+
+      // Меняем статус комнаты на finished
+      await client.query(
+        'UPDATE rooms SET status = $1, finished_at = NOW(), winner_id = $2 WHERE id = $3',
+        ['finished', winner_id, roomId]
+      );
+
+      await client.query('COMMIT');
+
+      res.json({
+        message: 'Игра успешно завершена',
+        room_id: roomId,
+        winner_id: winner_id,
+        prize: {
+          total: totalPrize,
+          winner: winnerPrize,
+          organizer: organizerFee
+        }
+      });
+
+    } catch (error) {
+      await client.query('ROLLBACK');
+      console.error('Ошибка при завершении игры:', error);
       res.status(500).json({ message: 'Ошибка сервера', error: error.message });
     } finally {
       client.release();
@@ -702,6 +639,57 @@ export default function roomsRoutes(pool) {
     }
   });
 
+  // Получение истории комнат
+  router.get('/history', verifyJWT(), async (req, res) => {
+    const client = await pool.connect();
+    try {
+      const userId = req.user.id;
+      const { page = 1, limit = 10 } = req.query;
+      const offset = (page - 1) * limit;
+
+      const roomsQuery = `
+        SELECT
+          r.*,
+          u_creator.username as creator_username,
+          u_winner.username as winner_username,
+          (SELECT COUNT(*) FROM participants WHERE room_id = r.id) as participant_count
+        FROM rooms r
+        LEFT JOIN users u_creator ON r.creator_id = u_creator.id
+        LEFT JOIN users u_winner ON r.winner_id = u_winner.id
+        WHERE r.status = 'finished' AND (r.creator_id = $1 OR EXISTS (
+          SELECT 1 FROM participants WHERE room_id = r.id AND user_id = $1
+        ))
+        ORDER BY r.finished_at DESC
+        LIMIT $2 OFFSET $3
+      `;
+
+      const roomsResult = await client.query(roomsQuery, [userId, limit, offset]);
+
+      const countResult = await client.query(`
+        SELECT COUNT(*) as total
+        FROM rooms
+        WHERE status = 'finished' AND (creator_id = $1 OR EXISTS (
+          SELECT 1 FROM participants WHERE room_id = rooms.id AND user_id = $1
+        ))
+      `, [userId]);
+
+      res.json({
+        rooms: roomsResult.rows,
+        pagination: {
+          total: parseInt(countResult.rows[0].total),
+          page: parseInt(page),
+          limit: parseInt(limit),
+          pages: Math.ceil(parseInt(countResult.rows[0].total) / limit)
+        }
+      });
+    } catch (error) {
+      console.error('Ошибка при получении истории комнат:', error);
+      res.status(500).json({ message: 'Ошибка сервера', error: error.message });
+    } finally {
+      client.release();
+    }
+  });
+
   // Удаление комнаты (только создатель)
   router.delete('/:roomId', verifyJWT(), async (req, res) => {
     const client = await pool.connect();
@@ -710,21 +698,31 @@ export default function roomsRoutes(pool) {
       const { roomId } = req.params;
       // Проверяем, что комната существует и пользователь — её создатель
       const { rows } = await client.query(
-        'SELECT creator_id FROM rooms WHERE id = $1', [roomId]
+        'SELECT * FROM rooms WHERE id = $1', [roomId]
       );
-      if (!rows.length || rows[0].creator_id !== req.user.id) {
+
+      if (!rows.length) {
         await client.query('ROLLBACK');
-        return res.status(403).json({ message: 'Нет доступа' });
+        return res.status(404).json({ message: 'Комната не найдена' });
       }
+
+      if (rows[0].creator_id !== req.user.id) {
+        await client.query('ROLLBACK');
+        return res.status(403).json({ message: 'Только создатель может удалить комнату' });
+      }
+
+      if (rows[0].status !== 'waiting') {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ message: 'Можно удалить только комнаты в статусе ожидания' });
+      }
+
       // Возврат средств участникам
-      const feeRes = await client.query(
-        'SELECT entry_fee FROM rooms WHERE id = $1', [roomId]
-      );
-      await refundParticipants(client, roomId, feeRes.rows[0].entry_fee);
+      await refundParticipants(client, roomId, rows[0].entry_fee);
+
       // Удаляем комнату
       await client.query('DELETE FROM rooms WHERE id = $1', [roomId]);
       await client.query('COMMIT');
-      res.json({ message: 'Комната закрыта' });
+      res.json({ message: 'Комната закрыта, средства возвращены участникам' });
     } catch (e) {
       await client.query('ROLLBACK');
       console.error(e);

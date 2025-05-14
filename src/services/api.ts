@@ -611,66 +611,66 @@ export const userApi = {
     }),
 };
 
-// Room API endpoints
-export const roomApi = {
-  /**
-   * Get all rooms (standard, bonus, hero)
-   */
-  getRooms: () => fetchApi<Room[]>('/rooms'),
-
-  /**
-   * Create a new room
-   * Returns room with room_key
-   */
-  createRoom: (creatorId: string, type: 'hero', entryFee: number) =>
-    fetchApiWithoutDebounce<Room & { room_key: string }>('/rooms', {
+// Стандартные комнаты
+export const standardApi = {
+  list: () =>
+    fetchApi<Room[]>(`/rooms/standard`),
+  get: (id: string) =>
+    fetchApi<Room & { participants: Participant[] }>(`/rooms/standard/${id}`),
+  joinOrCreate: (entryFee: number) =>
+    fetchApiWithoutDebounce<{
+      message: string;
+      roomId: string;
+      gameStarting: boolean;
+    }>(`/rooms/standard/join`, {
       method: 'POST',
-      body: JSON.stringify({ type, entry_fee: entryFee }),
+      body: JSON.stringify({ entry_fee: entryFee }),
     }),
-
-  /**
-   * Join an existing room by ID
-   */
-  joinRoom: (roomId: string, userId: string) =>
-    fetchApiWithoutDebounce<any>(`/rooms/${roomId}/join`, {
+  startGame: (roomId: string, secretKey: string) =>
+    fetchApiWithoutDebounce<any>(`/rooms/standard/${roomId}/start-game`, {
       method: 'POST',
-      body: JSON.stringify({ user_id: userId }),
+      body: JSON.stringify({ secret_key: secretKey }),
     }),
+  finishGame: (roomId: string, winnerId: string, secretKey: string) =>
+    fetchApiWithoutDebounce<any>(`/rooms/standard/${roomId}/finish-game`, {
+      method: 'POST',
+      body: JSON.stringify({ winner_id: winnerId, secret_key: secretKey }),
+    }),
+  leave: (roomId: string) =>
+    fetchApiWithoutDebounce<any>(`/rooms/standard/${roomId}/leave`, {
+      method: 'POST',
+    }),
+  status: (roomId: string) =>
+    fetchApi<any>(`/rooms/standard/${roomId}/status`),
+};
 
-  /**
-   * Join a room by its public key
-   * Returns participant and room data
-   */
-  joinRoomByKey: (roomKey: string) =>
+// Hero-комнаты
+export const heroApi = {
+  list: () =>
+    fetchApi<Array<Room & { player_count: number; room_key?: string }>>(`/rooms/hero`),
+  get: (id: string) =>
+    fetchApiWithoutDebounce<ObserveRoomResponse>(`/rooms/hero/${id}`, {
+      method: 'GET',
+    }),
+  create: (entryFee: number) =>
+    fetchApiWithoutDebounce<Room & { room_key: string }>(`/rooms/hero`, {
+      method: 'POST',
+      body: JSON.stringify({ type: 'hero', entry_fee: entryFee }),
+    }),
+  joinByKey: (key: string) =>
     fetchApiWithoutDebounce<{ participant: Participant; room: Room }>(
-      '/rooms/join-by-key',
-      {
-        method: 'POST',
-        body: JSON.stringify({ room_key: roomKey }),
-      }
+      `/rooms/hero/join-by-key`,
+      { method: 'POST', body: JSON.stringify({ room_key: key }) }
     ),
-
-  /**
-   * Start a game in a room
-   */
-  startGame: (roomId: string) =>
-    fetchApiWithoutDebounce<any>(`/rooms/${roomId}/start`, { method: 'POST' }),
-
-  /**
-   * Организатор заходит в созданную комнату
-   * GET запрос для получения информации о комнате
-   */
-  observeRoom: (roomId: string): Promise<ObserveRoomResponse> =>
+  observe: (roomId: string) =>
     fetchApiWithoutDebounce<ObserveRoomResponse>(
-      `/rooms/${roomId}/observe`,
+      `/rooms/hero/${roomId}/observe`,
       { method: 'GET' }
     ),
-
-  /**
-   * Delete a room by its ID
-   */
-  deleteRoom: (roomId: string) =>
-    fetchApiWithoutDebounce<any>(`/rooms/${roomId}`, { method: 'DELETE' }),
+  delete: (roomId: string) =>
+    fetchApiWithoutDebounce<any>(`/rooms/hero/${roomId}`, {
+      method: 'DELETE',
+    }),
 };
 
 // Game API endpoints

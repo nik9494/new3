@@ -9,7 +9,7 @@ import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
-import { apiRateLimit, tapRateLimit, detectVPN } from './middleware/auth.js';
+import { apiRateLimit, tapRateLimit, detectVPN, verifyJWT } from './middleware/auth.js';
 import path from 'path';
 import fs from 'fs';
 import { v4 as uuidv4 } from 'uuid';
@@ -23,7 +23,8 @@ dotenv.config({ path: path.join(__dirname, '.env') });
 // Import routes dynamically
 const importRoutes = async () => {
   const usersRoutes = (await import('./routes/users.js')).default;
-  const roomsRoutes = (await import('./routes/rooms.js')).default;
+  const standardRoomsRoutes = (await import('./routes/standardRooms.js')).default;
+  const heroRoomsRoutes = (await import('./routes/heroRooms.js')).default;
   const gamesRoutes = (await import('./routes/games.js')).default;
   const transactionsRoutes = (await import('./routes/transactions.js')).default;
   const referralsRoutes = (await import('./routes/referrals.js')).default;
@@ -32,7 +33,8 @@ const importRoutes = async () => {
 
   return {
     usersRoutes,
-    roomsRoutes,
+    standardRoomsRoutes,
+    heroRoomsRoutes,
     gamesRoutes,
     transactionsRoutes,
     referralsRoutes,
@@ -46,7 +48,7 @@ const PORT = process.env.PORT || 3001;
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const MINI_APP_URL =
   process.env.MINI_APP_URL ||
-  'https://gel-book-theorem-hanging.trycloudflare.com';
+  'https://tricks-aspect-causes-invitation.trycloudflare.com';
 
 // Database connection
 const { Pool } = pg;
@@ -76,8 +78,8 @@ const createDatabasePool = async () => {
     // Check if users table exists
     const tableCheck = await client.query(`
       SELECT EXISTS (
-        SELECT FROM information_schema.tables 
-        WHERE table_schema = 'public' 
+        SELECT FROM information_schema.tables
+        WHERE table_schema = 'public'
         AND table_name = 'users'
       );
     `);
@@ -139,7 +141,7 @@ app.set('trust proxy', [
 
 // Parse Mini App URL for CORS configuration
 const allowedOrigins = [
-  'https://gel-book-theorem-hanging.trycloudflare.com',
+  'https://tricks-aspect-causes-invitation.trycloudflare.com',
   'https://web.telegram.org',
   'https://telegram.org',
 ];
@@ -570,7 +572,20 @@ const startServer = async () => {
 
     // Setup API routes
     app.use('/api/users', routes.usersRoutes(pool));
-    app.use('/api/rooms', routes.roomsRoutes(pool));
+
+    // Для стандартных комнат (все запросы требуют JWT)
+    app.use(
+      '/api/rooms/standard',
+      verifyJWT(),
+      routes.standardRoomsRoutes(pool)
+    );
+
+    // Для Hero-комнат (все запросы требуют JWT)
+    app.use(
+      '/api/rooms/hero',
+      routes.heroRoomsRoutes(pool)
+    );
+
     app.use('/api/games/:gameId/taps', tapRateLimit());
     app.use('/api/games', routes.gamesRoutes(pool));
     app.use('/api/transactions', routes.transactionsRoutes(pool));
