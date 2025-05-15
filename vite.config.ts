@@ -19,54 +19,46 @@ export default defineConfig({
     },
   },
   server: {
-    // @ts-ignore
+    // Разрешаем обращаться с любых хостов (нужно для туннеля)
     allowedHosts: true,
     proxy: {
-      // REST API proxy (no WebSocket)
+      // Прокси для REST API (без WS)
       '/api': {
         target: 'http://localhost:3001',
         changeOrigin: true,
         secure: false,
         ws: false,
-        configure: (proxy, _options) => {
-          proxy.on('error', (err, _req, _res) => {
-            console.log('Ошибка прокси:', err);
+        configure: (proxy) => {
+          proxy.on('error', (err) => {
+            console.log('Ошибка прокси API:', err);
           });
-          proxy.on('proxyReq', (proxyReq, req, _res) => {
-            console.log('Проксирование запроса:', req.method, req.url);
+          proxy.on('proxyReq', (proxyReq, req) => {
+            console.log('Проксирование HTTP:', req.method, req.url);
           });
-          proxy.on('proxyRes', (proxyRes, req, _res) => {
+          proxy.on('proxyRes', (proxyRes, req) => {
             console.log(
-              'Получен ответ от прокси:',
+              'Ответ от API-прокси:',
               proxyRes.statusCode,
               req.url
             );
           });
         },
       },
-      // Socket.IO WebSocket proxy
+      // Прокси для Socket.IO WebSocket
       '/socket.io': {
-        target: 'ws://localhost:3001',
+        target: 'http://localhost:3001',
         changeOrigin: true,
         secure: false,
         ws: true,
-        configure: (proxy, _options) => {
-          proxy.on('error', (err, _req, _res) => {
-            console.log('Socket.IO proxy error:', err);
+        configure: (proxy) => {
+          proxy.on('error', (err) => {
+            console.log('Ошибка прокси Socket.IO:', err);
           });
-          proxy.on('proxyReq', (proxyReq, req, _res) => {
-            console.log('Socket.IO proxyReq:', req.url);
+          proxy.on('proxyReq', (proxyReq, req) => {
+            console.log('Проксирование WS:', req.url);
           });
         },
       },
-      // If your Socket.IO server is mounted under /api/socket.io, uncomment:
-      // '/api/socket.io': {
-      //   target: 'ws://localhost:3001',
-      //   changeOrigin: true,
-      //   secure: false,
-      //   ws: true,
-      // },
     },
   },
 });
-

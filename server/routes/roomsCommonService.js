@@ -86,27 +86,69 @@ export default function roomsService(pool, config) {
   }
 
   async function join(client, roomId, userId, entryFee) {
+    // Снимаем звезды у пользователя
     await client.query(
       `UPDATE users SET balance_stars = balance_stars - $1 WHERE id = $2`,
       [entryFee, userId]
     );
+    
+    // Добавляем пользователя в участники
+    const participantId = uuidv4();
     await client.query(
-      `INSERT INTO participants (id, room_id, user_id)
-       VALUES (gen_random_uuid(), $1, $2)`,
-      [roomId, userId]
+      `INSERT INTO participants (id, room_id, user_id, joined_at)
+       VALUES ($1, $2, $3, NOW())`,
+      [participantId, roomId, userId]
     );
-    return roomId;
+    
+    // Получаем данные участника для возврата
+    const participantResult = await client.query(
+      `SELECT p.*, u.username, u.photo_url 
+       FROM participants p
+       JOIN users u ON p.user_id = u.id
+       WHERE p.id = $1`,
+      [participantId]
+    );
+    
+    return participantResult.rows[0];
   }
 
   async function joinByKey(client, roomKey, userId, entryFee) {
+    // Находим комнату по ключу
     const roomRes = await client.query(
-      `SELECT id, entry_fee FROM rooms WHERE room_key = $1 AND status='waiting'`,
+      `SELECT * FROM rooms WHERE room_key = $1 AND status='waiting'`,
       [roomKey]
     );
+    
     if (!roomRes.rows.length) throw new Error('Комната не найдена или недоступна');
-    const { id, entry_fee } = roomRes.rows[0];
-    if (parseFloat(entry_fee) !== entryFee) throw new Error('Несоответствие entry_fee');
-    return join(client, id, userId, entryFee);
+    const room = roomRes.rows[0];
+    
+    if (parseFloat(room.entry_fee) !== entryFee) throw new Error('Несоответствие entry_fee');
+    
+    // Добавляем пользователя в комнату
+    const participant = await join(client, room.id, userId, entryFee);
+    
+    // Возвращаем и участника, и данные комнаты
+    return { participant, room };
+  }
+
+  async function validateRoomStatus(client, roomIdOrKey) {
+    // Проверка существования комнаты и её статуса
+    const isKey = typeof roomIdOrKey === 'string' && roomIdOrKey.length <= 6;
+    const query = isKey 
+      ? `SELECT id, status FROM rooms WHERE room_key = $1`
+      : `SELECT id, status FROM rooms WHERE id = $1`;
+    
+    const { rows } = await client.query(query, [roomIdOrKey]);
+    
+    if (!rows.length) {
+      throw new Error('Комната не найдена');
+    }
+    
+    if (rows[0].status !== 'waiting') {
+      throw new Error('Комната недоступна для присоединения');
+    }
+    
+    return rows[0].id;
   }
 
   async function start(client, roomId) {
@@ -138,12 +180,12 @@ export default function roomsService(pool, config) {
   return {
     refundParticipants,
     cleanupExpired,
-    createStandard,  // Заменено create на createStandard
-    createHero,      // Добавлен метод createHero
+    createStandard,
+    createHero,
     join,
     joinByKey,
+    validateRoomStatus, // Добавляем в экспорт
     start,
     finish,
   };
 }
-

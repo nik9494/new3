@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Button } from './ui/button';
 import { Progress } from './ui/progress';
@@ -54,12 +54,14 @@ export function GameRoom() {
   const tapButtonRef = useRef<HTMLButtonElement>(null);
   const tapIntervalRef = useRef<number | null>(null);
 
+  const socketOptions = useMemo(() => ({
+    tableName: 'rooms',
+    filter: 'id',
+    filterValue: roomId,
+  }), [roomId]);
+
   const { subscribeToChannel, unsubscribeFromChannel, publishToChannel } =
-    useRealtime(`room-${roomId || 'default'}`, {
-      tableName: 'rooms',
-      filter: 'id',
-      filterValue: roomId,
-    });
+    useRealtime(`room-${roomId || 'default'}`, socketOptions);
   const { fetchData } = useApiRequest();
   const { user, appUser } = useTelegram();
 
@@ -94,8 +96,20 @@ export function GameRoom() {
     const isKeyFormat = roomId.length === 6;
     const storedType = localStorage.getItem(LOCALSTORAGE_KEY_ROOM_TYPE);
 
-    // 1) Если зашли по ключу — joinByKey
-    if (isKeyFormat && !isObserver) {
+    // 0) Если mode=observer — сначала обрабатываем наблюдение за уже существующей комнатой
+    if (isObserver) {
+      heroApi.observe(roomId)
+        .then(({ room, participants }) => {
+          initializeRoom(room, participants);
+          setIsCreator(room.creator_id === appUser.id);
+          setIsJoined(true);
+        })
+        .catch(() => navigate('/'));
+      return;
+    }
+
+    // 1) Если это 6-значный ключ — первый вход в геро-комнату
+    if (isKeyFormat) {
       heroApi.joinByKey(roomId)
         .then(({ room, participant }) => {
           initializeRoom(room, [participant]);
@@ -108,7 +122,7 @@ export function GameRoom() {
       return;
     }
 
-    // 2) Если уже была hero-комната (например при перезагрузке)
+    // 2) Если ранее уже была hero-комната (localStorage)
     if (storedType === 'hero') {
       heroApi.get(roomId)
         .then((res) => {
@@ -120,19 +134,7 @@ export function GameRoom() {
       return;
     }
 
-    // 3) Наблюдатель (observer=true)
-    if (isObserver) {
-      heroApi.observe(roomId)
-        .then(({ room, participants }) => {
-          initializeRoom(room, participants);
-          setIsCreator(room.creator_id === appUser.id);
-          setIsJoined(true);
-        })
-        .catch(() => navigate('/'));
-      return;
-    }
-
-    // 4) Стандартная комната
+    // 3) Иначе — создаем или заходим в стандартную комнату
     standardApi.joinOrCreate(gameState.entryFee || 0)
       .then(({ roomId: newId }) => standardApi.get(newId))
       .then(info => {
@@ -450,6 +452,7 @@ export function GameRoom() {
 
         {/* Tap button */}
         <Button
+          ref={tapButtonRef}
           onClick={handleTap}
           className="w-40 h-40 rounded-full bg-[#FFCA28] hover:bg-[#FFB300] text-black text-2xl font-bold mb-8"
         >
@@ -555,4 +558,5 @@ export function GameRoom() {
 }
 
 // Add default export for the component
+
 export default GameRoom;

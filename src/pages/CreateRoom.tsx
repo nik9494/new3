@@ -49,6 +49,18 @@ const CreateRoom: React.FC = () => {
   const [timeLeft, setTimeLeft] = useState<number>(0);
   const [isObserverMode, setIsObserverMode] = useState<boolean>(false);
 
+  // Очистка данных комнаты
+  const clearRoomData = () => {
+    localStorage.removeItem(LOCALSTORAGE_KEY_ROOM_ID);
+    localStorage.removeItem(LOCALSTORAGE_KEY_ROOM_KEY);
+    localStorage.removeItem(LOCALSTORAGE_KEY_ROOM_TYPE);
+    localStorage.removeItem(LOCALSTORAGE_KEY_CREATED_AT);
+    setRoomId('');
+    setCreatedRoomKey('');
+    setIsObserverMode(false);
+    setTimeLeft(0);
+  };
+
   // Расчет оставшегося времени комнаты
   const calculateTimeLeft = (): number => {
     const createdAtStr = localStorage.getItem(LOCALSTORAGE_KEY_CREATED_AT);
@@ -56,49 +68,50 @@ const CreateRoom: React.FC = () => {
 
     const createdAt = parseInt(createdAtStr, 10);
     const expiresAt = createdAt + 5 * 60 * 1000; // 5 минут в миллисекундах
-    const remaining = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
-    return remaining;
+    const now = Date.now();
+    
+    // Если время уже истекло, очищаем данные и возвращаем 0
+    if (now >= expiresAt) {
+      clearRoomData();
+      return 0;
+    }
+    
+    return Math.max(0, Math.floor((expiresAt - now) / 1000));
   };
 
   // Восстановление данных при загрузке компонента
   useEffect(() => {
     const storedRoomId = localStorage.getItem(LOCALSTORAGE_KEY_ROOM_ID);
     const storedRoomKey = localStorage.getItem(LOCALSTORAGE_KEY_ROOM_KEY);
-
-    if (storedRoomId) {
-      setRoomId(storedRoomId);
+    const currentTimeLeft = calculateTimeLeft();
+    
+    // Если время истекло или нет сохраненных данных, очищаем
+    if (currentTimeLeft <= 0 || !storedRoomId) {
+      clearRoomData();
+      return;
     }
 
+    // Устанавливаем значения только если время еще не истекло
+    setRoomId(storedRoomId);
     if (storedRoomKey) {
       setCreatedRoomKey(storedRoomKey);
     }
-
-    // Инициализация таймера
-    setTimeLeft(calculateTimeLeft());
+    
+    setTimeLeft(currentTimeLeft);
+    
+    // Проверяем существует ли еще комната
+    const checkRoomExists = async () => {
+      try {
+        const { room } = await heroApi.observe(storedRoomId);
+        setIsObserverMode(true);
+      } catch (error) {
+        console.error('Комната не найдена или недоступна:', error);
+        clearRoomData();
+      }
+    };
+    
+    checkRoomExists();
   }, []);
-
-  // Проверка существующей комнаты
-  useEffect(() => {
-    if (roomId) {
-      heroApi.observe(roomId)
-        .then(({ room }) => {
-          setIsObserverMode(true);
-
-          // Сохраняем время создания комнаты, если оно не сохранено
-          if (!localStorage.getItem(LOCALSTORAGE_KEY_CREATED_AT)) {
-            const currentTime = Date.now();
-            const createdAt = currentTime - (300 - room.time_left_seconds) * 1000;
-            localStorage.setItem(LOCALSTORAGE_KEY_CREATED_AT, createdAt.toString());
-          }
-
-          setTimeLeft(calculateTimeLeft());
-        })
-        .catch(() => {
-          // Комната уже закрыта, очищаем данные
-          clearRoomData();
-        });
-    }
-  }, [roomId]);
 
   // Таймер обратного отсчета
   useEffect(() => {
@@ -118,17 +131,6 @@ const CreateRoom: React.FC = () => {
 
     return () => clearInterval(timer);
   }, [roomId]);
-
-  // Очистка данных комнаты
-  const clearRoomData = () => {
-    localStorage.removeItem(LOCALSTORAGE_KEY_ROOM_ID);
-    localStorage.removeItem(LOCALSTORAGE_KEY_ROOM_KEY);
-    localStorage.removeItem(LOCALSTORAGE_KEY_ROOM_TYPE);
-    localStorage.removeItem(LOCALSTORAGE_KEY_CREATED_AT);
-    setRoomId('');
-    setCreatedRoomKey('');
-    setIsObserverMode(false);
-  };
 
   // Форматирование времени в MM:SS
   const formatTime = (seconds: number): string => {
@@ -162,7 +164,8 @@ const CreateRoom: React.FC = () => {
         setTimeLeft(calculateTimeLeft());
         setIsObserverMode(true);
         setShowSuccessDialog(true);
-      } catch {
+      } catch (error) {
+        console.error('Ошибка при наблюдении за комнатой:', error);
         setError('Не удалось получить время жизни комнаты');
         clearRoomData();
       }
@@ -190,13 +193,15 @@ const CreateRoom: React.FC = () => {
   // Вход в созданную комнату
   const enterCreatedRoom = async () => {
     try {
+      // Проверяем, что комната все еще существует
       const { room } = await heroApi.observe(roomId);
       setTimeLeft(calculateTimeLeft());
       setIsObserverMode(true);
       navigate(`/game-room/${roomId}?observer=true`);
-    } catch {
-      navigate(`/game-room/${roomId}`);
+    } catch (error) {
+      console.error('Ошибка при входе в комнату:', error);
       clearRoomData();
+      setError('Комната больше не доступна');
     }
   };
 
@@ -248,6 +253,7 @@ const CreateRoom: React.FC = () => {
       setShowSuccessDialog(false);
     } catch (error) {
       console.error('Ошибка при закрытии комнаты:', error);
+      setError('Не удалось закрыть комнату');
     }
   };
 
@@ -259,6 +265,7 @@ const CreateRoom: React.FC = () => {
 
         <Tabs
           defaultValue="create"
+          value={activeTab}
           onValueChange={value => setActiveTab(value as 'create' | 'join')}
         >
           <TabsList className="grid w-full grid-cols-2">

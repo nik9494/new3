@@ -26,16 +26,21 @@ export function useRealtime<T>(
   const [error, setError] = useState<Error | null>(null);
   const socketRef = useRef<Socket>();
   const handlersRef = useRef<Record<string, (data: any) => void>>({});
+  
+  // Вынесли baseUrl за пределы эффекта для оптимизации
+  const baseUrl = import.meta.env.VITE_API_URL || '';
 
   // Initialize socket and join channel
   useEffect(() => {
-    const socket = io(window.location.origin, {
-      path: '/socket.io',
+    // Сброс данных при смене канала или опций
+    setData([]);
+    
+    const socket = io(baseUrl, {
+      path: '/socket.io',      // то же, что и в прокси
       transports: ['websocket'],
-      reconnection: true,
-      reconnectionAttempts: Infinity,
+      reconnectionAttempts: 5,
       reconnectionDelay: 1000,
-      reconnectionDelayMax: 5000,
+      //secure: true,          // явно использовать wss://
     });
     socketRef.current = socket;
 
@@ -59,13 +64,23 @@ export function useRealtime<T>(
       }
     });
 
+    // Добавили обработку событий update для изменения data
+    socket.on('update', (msg: T) => {
+      setData(prev => [...prev, msg]);
+    });
+
     return () => {
-      Object.keys(handlersRef.current).forEach(event =>
-        socketRef.current?.off(event, handlersRef.current[event])
+      // Отписываемся от всех кастомных событий
+      Object.entries(handlersRef.current).forEach(([event, handler]) => 
+        socket.off(event, handler)
       );
+      
+      // Отписываемся от общего 'update'
+      socket.off('update');
+      
       socket.disconnect();
     };
-  }, [channel, options]);
+  }, [channel, options, baseUrl]); // Добавили baseUrl в зависимости
 
   // send a message to the channel
   const sendMessage = useCallback(

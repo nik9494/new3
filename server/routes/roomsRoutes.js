@@ -98,7 +98,7 @@ export default function roomsRoutes(pool) {
       }
 
       // Добавляем пользователя как участника
-      await standardService.join(client, roomData.roomId, userId, entryFee);
+      const participant = await standardService.join(client, roomData.roomId, userId, entryFee);
 
       // Получаем количество игроков в комнате
       const { rows: [{ player_count }] } = await client.query(
@@ -106,7 +106,7 @@ export default function roomsRoutes(pool) {
       );
 
       await client.query('COMMIT');
-      res.json({ roomId: roomData.roomId, player_count });
+      res.json({ roomId: roomData.roomId, player_count, participant });
     } catch (e) {
       await client.query('ROLLBACK');
       res.status(400).json({ error: e.message });
@@ -163,7 +163,10 @@ export default function roomsRoutes(pool) {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
+      // Валидируем статус комнаты перед подключением
       await heroService.validateRoomStatus(client, req.body.room_key);
+      
+      // Подключаемся к комнате по ключу - теперь возвращается полная информация
       const { participant, room } = await heroService.joinByKey(
         client,
         req.body.room_key,
